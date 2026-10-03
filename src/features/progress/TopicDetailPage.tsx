@@ -1,12 +1,17 @@
+import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { ArrowLeft, TrendingUp, TrendingDown, Minus, CalendarClock, FileQuestion } from "lucide-react";
 import { getTopic, getSubject, getMasteryForTopic } from "../../lib/mockData";
+import { isLiveSubject } from "../../lib/supabase";
+import { fetchLiveMasteryForTopic } from "../../lib/api/liveData";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { MasteryTag } from "../../components/ui/StatusTag";
 import { SkillBar } from "../../components/ui/Progress";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { ListSkeleton } from "../../components/ui/Skeleton";
 import { formatDate } from "../../lib/utils";
+import type { MasteryRecord } from "../../lib/types";
 
 const trendConfig = {
   up: { icon: TrendingUp, label: "Improved since last week", classes: "text-success" },
@@ -16,11 +21,31 @@ const trendConfig = {
 
 export function TopicDetailPage() {
   const { id } = useParams();
+  // Keyed on `id` so navigating between topics fully remounts this component
+  // instead of needing an explicit "reset to loading" setState inside the
+  // fetch effect below.
+  return <TopicDetailPageForTopic key={id} id={id} />;
+}
+
+function TopicDetailPageForTopic({ id }: { id?: string }) {
   const navigate = useNavigate();
   const topic = id ? getTopic(id) : undefined;
-  const mastery = id ? getMasteryForTopic(id) : undefined;
+  const live = topic ? isLiveSubject(topic.subjectId) : false;
 
-  if (!topic) {
+  const [liveMastery, setLiveMastery] = useState<MasteryRecord | undefined | null>(null);
+
+  useEffect(() => {
+    if (!live || !id) return;
+    let cancelled = false;
+    fetchLiveMasteryForTopic(id)
+      .then((m) => !cancelled && setLiveMastery(m ?? undefined))
+      .catch(() => !cancelled && setLiveMastery(undefined));
+    return () => {
+      cancelled = true;
+    };
+  }, [live, id]);
+
+  if (!topic || !id) {
     return (
       <Card>
         <EmptyState icon={<FileQuestion className="size-6" aria-hidden="true" />} title="Topic not found" />
@@ -29,6 +54,17 @@ export function TopicDetailPage() {
   }
 
   const subject = getSubject(topic.subjectId);
+  const loading = live && liveMastery === null;
+  const mastery = live ? liveMastery ?? undefined : getMasteryForTopic(id);
+
+  if (loading) {
+    return (
+      <div className="pb-6 pt-2 max-w-lg space-y-4">
+        <BackLink />
+        <ListSkeleton rows={3} />
+      </div>
+    );
+  }
 
   if (!mastery) {
     return (

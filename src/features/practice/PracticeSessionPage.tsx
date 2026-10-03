@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { sampleQuestions, getSubject, getTopic } from "../../lib/mockData";
+import { isLiveSubject } from "../../lib/supabase";
+import { fetchLiveQuestions, submitLiveAttempt } from "../../lib/api/liveData";
 import { PracticeTopBar } from "./components/PracticeTopBar";
 import { QuestionCard } from "./components/QuestionCard";
 import { FeedbackSheet } from "./components/FeedbackSheet";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
+import { ListSkeleton } from "../../components/ui/Skeleton";
 import { classifyMistake } from "./mistakeClassifier";
 import { nowMs } from "../../lib/dates";
-import type { PracticeAttempt } from "../../lib/types";
+import { useAppState } from "../../state/useAppState";
+import { useToast } from "../../components/ui/useToast";
+import type { PracticeAttempt, Question } from "../../lib/types";
 
 interface NavState {
   subjectId?: string;
@@ -19,15 +24,35 @@ interface NavState {
 export function PracticeSessionPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { refreshPendingCount } = useAppState();
+  const { show } = useToast();
   const navState = (location.state as NavState) ?? {};
   const mode = navState.mode ?? "learning";
   const timed = navState.timed ?? false;
 
-  const questions = navState.subjectId
-    ? sampleQuestions.filter((q) => q.subjectId === navState.subjectId).length > 0
-      ? sampleQuestions.filter((q) => q.subjectId === navState.subjectId)
-      : sampleQuestions
-    : sampleQuestions;
+  const [questions, setQuestions] = useState<Question[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (navState.subjectId && isLiveSubject(navState.subjectId)) {
+        try {
+          const live = await fetchLiveQuestions(navState.subjectId);
+          if (!cancelled) setQuestions(live.length > 0 ? live : sampleQuestions);
+          return;
+        } catch {
+          if (!cancelled) show("Couldn't load the latest question bank — using what's saved on this device.", "warning");
+        }
+      }
+      const filtered = navState.subjectId ? sampleQuestions.filter((q) => q.subjectId === navState.subjectId) : [];
+      if (!cancelled) setQuestions(filtered.length > 0 ? filtered : sampleQuestions);
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navState.subjectId]);
 
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
@@ -36,9 +61,10 @@ export function PracticeSessionPage() {
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [exitOpen, setExitOpen] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(20 * 60);
+  const [submitting, setSubmitting] = useState(false);
   const questionStart = useRef(0);
 
-  const question = questions[index];
+  const question = questions?.[index];
 
   useEffect(() => {
     questionStart.current = nowMs();
@@ -51,6 +77,7 @@ export function PracticeSessionPage() {
   }, [timed]);
 
   function toggleFlag() {
+    if (!question) return;
     setFlagged((f) => {
       const next = new Set(f);
       if (next.has(question.id)) {
@@ -62,15 +89,37 @@ export function PracticeSessionPage() {
     });
   }
 
-  function submitAnswer() {
-    if (!selected) return;
+  async function submitAnswer() {
+    if (!selected || !question) return;
+    setSubmitting(true);
     const timeSeconds = Math.round((nowMs() - questionStart.current) / 1000);
     const isCorrect = selected === question.correctOptionId;
-    const mistakeType = isCorrect ? undefined : classifyMistake(timeSeconds);
-    setAttempts((a) => [
-      ...a,
-      { questionId: question.id, selectedOptionId: selected, isCorrect, mistakeType, timeSeconds, flagged: flagged.has(question.id) },
-    ]);
+    const isFlagged = flagged.has(question.id);
+
+    let mistakeType = isCorrect ? undefined : classifyMistake(timeSeconds);
+
+    if (isLiveSubject(question.subjectId)) {
+      try {
+        const result = await submitLiveAttempt({
+          question,
+          selectedOptionId: selected,
+          isCorrect,
+          timeSeconds,
+          flagged: isFlagged,
+          now: new Date(),
+        });
+        mistakeType = result.mistakeType;
+        if (result.queued) {
+          refreshPendingCount();
+          show("Saved on this device — will sync once you're back online.", "info");
+        }
+      } catch {
+        show("Couldn't save that answer. It's kept on this device and we'll retry.", "warning");
+      }
+    }
+
+    setSubmitting(false);
+    setAttempts((a) => [...a, { questionId: question.id, selectedOptionId: selected, isCorrect, mistakeType, timeSeconds, flagged: isFlagged }]);
     if (mode === "learning") {
       setShowFeedback(true);
     } else {
@@ -81,6 +130,7 @@ export function PracticeSessionPage() {
   function goNext() {
     setShowFeedback(false);
     setSelected(null);
+    if (!questions) return;
     if (index + 1 >= questions.length) {
       navigate("/practice/results", { state: { attempts, questions } });
     } else {
@@ -89,6 +139,15 @@ export function PracticeSessionPage() {
   }
 
   const lastAttempt = attempts[attempts.length - 1];
+
+  if (!questions || !question) {
+    return (
+      <div className="min-h-screen bg-bg px-4 sm:px-6 py-6 max-w-2xl mx-auto">
+        <ListSkeleton rows={2} />
+      </div>
+    );
+  }
+
   const subject = getSubject(question.subjectId);
   const topic = getTopic(question.topicId);
 
@@ -115,7 +174,14 @@ export function PracticeSessionPage() {
             locked={mode === "learning" && showFeedback}
           />
 
-          <Button size="lg" fullWidth className="mt-4" onClick={submitAnswer} disabled={!selected || (mode === "learning" && showFeedback)}>
+          <Button
+            size="lg"
+            fullWidth
+            className="mt-4"
+            onClick={submitAnswer}
+            loading={submitting}
+            disabled={!selected || submitting || (mode === "learning" && showFeedback)}
+          >
             {index + 1 === questions.length ? "Submit & finish" : "Submit answer"}
           </Button>
         </div>

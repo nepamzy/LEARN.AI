@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Flag, X, Clock } from "lucide-react";
 import { sampleQuestions, getSubject } from "../../lib/mockData";
+import { isLiveSubject } from "../../lib/supabase";
+import { fetchLiveQuestions, submitLiveAttempt } from "../../lib/api/liveData";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { StatusTag } from "../../components/ui/StatusTag";
+import { ListSkeleton } from "../../components/ui/Skeleton";
+import { useAppState } from "../../state/useAppState";
+import { nowMs } from "../../lib/dates";
 import { cx } from "../../lib/utils";
+import type { Question } from "../../lib/types";
 
 interface NavState {
   exam?: string;
@@ -22,12 +28,36 @@ function formatClock(s: number) {
 export function ExamSimulatorSessionPage() {
   const navigate = useNavigate();
   const { state } = useLocation();
+  const { refreshPendingCount } = useAppState();
   const navState = (state as NavState) ?? {};
 
-  const questions = useMemo(() => {
-    const filtered = sampleQuestions.filter((q) => navState.subjects?.includes(q.subjectId));
-    return filtered.length > 0 ? filtered : sampleQuestions;
-  }, [navState.subjects]);
+  const [questions, setQuestions] = useState<Question[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const subjectIds = navState.subjects ?? [];
+      const batches = await Promise.all(
+        subjectIds.map(async (subjectId) => {
+          if (isLiveSubject(subjectId)) {
+            try {
+              return await fetchLiveQuestions(subjectId);
+            } catch {
+              return sampleQuestions.filter((q) => q.subjectId === subjectId);
+            }
+          }
+          return sampleQuestions.filter((q) => q.subjectId === subjectId);
+        })
+      );
+      const combined = batches.flat();
+      if (!cancelled) setQuestions(combined.length > 0 ? combined : sampleQuestions);
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navState.subjects?.join(",")]);
 
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
@@ -35,15 +65,32 @@ export function ExamSimulatorSessionPage() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const totalSeconds = (Number(navState.duration) || 40) * 60;
   const [secondsLeft, setSecondsLeft] = useState(totalSeconds);
+  const timeSpentRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const t = setInterval(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const question = questions[index];
+  // Accumulate time spent per question across revisits: each time `index`
+  // changes (or the exam is left), the cleanup credits the elapsed time to
+  // whichever question was on screen.
+  useEffect(() => {
+    if (!questions) return;
+    const startedAt = nowMs();
+    const qId = questions[index]?.id;
+    const timeSpent = timeSpentRef.current; // stable object identity across renders
+    return () => {
+      if (!qId) return;
+      const elapsed = (nowMs() - startedAt) / 1000;
+      timeSpent[qId] = (timeSpent[qId] ?? 0) + elapsed;
+    };
+  }, [index, questions]);
+
+  const question = questions?.[index];
   const answeredCount = Object.keys(answers).length;
 
   function toggleFlag(id: string) {
@@ -58,8 +105,46 @@ export function ExamSimulatorSessionPage() {
     });
   }
 
-  function submit() {
+  async function submit() {
+    if (!questions) return;
+    setSubmitting(true);
+
+    const liveAnswered = questions.filter((q) => answers[q.id] && isLiveSubject(q.subjectId));
+    let anyQueued = false;
+    await Promise.all(
+      liveAnswered.map(async (q) => {
+        const selectedOptionId = answers[q.id];
+        const isCorrect = selectedOptionId === q.correctOptionId;
+        const timeSeconds = Math.max(1, Math.round(timeSpentRef.current[q.id] ?? 0));
+        try {
+          const result = await submitLiveAttempt({
+            question: q,
+            selectedOptionId,
+            isCorrect,
+            timeSeconds,
+            flagged: flagged.has(q.id),
+            now: new Date(),
+          });
+          if (result.queued) anyQueued = true;
+        } catch {
+          anyQueued = true;
+        }
+      })
+    );
+    if (anyQueued) refreshPendingCount();
+
+    setSubmitting(false);
     navigate("/exam/results", { state: { answers, questions } });
+  }
+
+  if (!questions || !question) {
+    return (
+      <div className="min-h-screen bg-ink px-4 sm:px-6 py-6">
+        <div className="max-w-2xl mx-auto">
+          <ListSkeleton rows={2} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -181,10 +266,12 @@ export function ExamSimulatorSessionPage() {
         title="Submit this exam?"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setConfirmOpen(false)}>
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={submitting}>
               Cancel
             </Button>
-            <Button onClick={submit}>Yes, submit</Button>
+            <Button onClick={submit} loading={submitting}>
+              Yes, submit
+            </Button>
           </>
         }
       >

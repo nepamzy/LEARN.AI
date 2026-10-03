@@ -45,6 +45,11 @@ export const subjects: Subject[] = [
   { id: "chemistry", name: "Chemistry", color: "amber" },
 ];
 
+// Math/English topic *metadata* (name, subject, grouping) still lives here so
+// getTopic()/getSubject() keep resolving synchronously everywhere in the UI —
+// but as of Phase 2, their *mastery* numbers come from the live BKT/FSRS
+// engine (src/lib/engine, src/lib/api/liveData.ts) against Supabase, not the
+// masteryRecords array below. See LIVE_SUBJECT_IDS in src/lib/supabase.ts.
 export const topics: Topic[] = [
   { id: "math-algebra", subjectId: "math", name: "Algebra" },
   { id: "math-algebra-simeq", subjectId: "math", name: "Simultaneous Equations", parentTopicId: "math-algebra" },
@@ -53,11 +58,16 @@ export const topics: Topic[] = [
   { id: "math-geometry-circles", subjectId: "math", name: "Circle Theorems", parentTopicId: "math-geometry" },
   { id: "math-trig", subjectId: "math", name: "Trigonometry" },
   { id: "math-stats", subjectId: "math", name: "Statistics" },
+  { id: "math-indices", subjectId: "math", name: "Indices and Logarithms" },
+  { id: "math-sets", subjectId: "math", name: "Sets and Venn Diagrams" },
 
   { id: "eng-comprehension", subjectId: "english", name: "Comprehension" },
   { id: "eng-lexis", subjectId: "english", name: "Lexis & Structure" },
   { id: "eng-essay", subjectId: "english", name: "Essay Writing" },
   { id: "eng-oral", subjectId: "english", name: "Oral English" },
+  { id: "eng-grammar", subjectId: "english", name: "Grammar" },
+  { id: "eng-vocabulary", subjectId: "english", name: "Vocabulary" },
+  { id: "eng-cloze", subjectId: "english", name: "Cloze Test" },
 
   { id: "bio-ecology", subjectId: "biology", name: "Ecology" },
   { id: "bio-genetics", subjectId: "biology", name: "Genetics" },
@@ -79,17 +89,11 @@ export const subjectMastery: SubjectMastery[] = [
   { subjectId: "chemistry", status: "support", changeNote: "Needs attention", nextRecommendation: "Start with Stoichiometry basics" },
 ];
 
+// Biology/Chemistry (and English Essay Writing, which stays on the mocked
+// assignment-grading path) are untouched by Phase 2. Mathematics and English's
+// other topics now come from the live engine — see the note above.
 export const masteryRecords: MasteryRecord[] = [
-  { topicId: "math-algebra-simeq", status: "review", masteryProbability: 0.58, trend: "up", questionsAttempted: 24, lastPracticed: "2026-09-30", nextReviewDue: "2026-10-02", confidence: "medium" },
-  { topicId: "math-algebra-quad", status: "building", masteryProbability: 0.64, trend: "up", questionsAttempted: 31, lastPracticed: "2026-09-28", nextReviewDue: "2026-10-04", confidence: "medium" },
-  { topicId: "math-geometry-circles", status: "support", masteryProbability: 0.31, trend: "flat", questionsAttempted: 12, lastPracticed: "2026-09-20", nextReviewDue: "2026-10-02", confidence: "low" },
-  { topicId: "math-trig", status: "strong", masteryProbability: 0.88, trend: "up", questionsAttempted: 40, lastPracticed: "2026-09-29", nextReviewDue: "2026-10-09", confidence: "high" },
-  { topicId: "math-stats", status: "building", masteryProbability: 0.6, trend: "flat", questionsAttempted: 18, lastPracticed: "2026-09-25", nextReviewDue: "2026-10-03", confidence: "medium" },
-
-  { topicId: "eng-comprehension", status: "strong", masteryProbability: 0.86, trend: "up", questionsAttempted: 28, lastPracticed: "2026-09-27", nextReviewDue: "2026-10-10", confidence: "high" },
-  { topicId: "eng-lexis", status: "strong", masteryProbability: 0.82, trend: "flat", questionsAttempted: 22, lastPracticed: "2026-09-26", nextReviewDue: "2026-10-08", confidence: "high" },
   { topicId: "eng-essay", status: "building", masteryProbability: 0.67, trend: "up", questionsAttempted: 9, lastPracticed: "2026-09-29", nextReviewDue: "2026-10-05", confidence: "medium" },
-  { topicId: "eng-oral", status: "building", masteryProbability: 0.7, trend: "flat", questionsAttempted: 14, lastPracticed: "2026-09-18", nextReviewDue: "2026-10-06", confidence: "medium" },
 
   { topicId: "bio-ecology", status: "building", masteryProbability: 0.61, trend: "up", questionsAttempted: 20, lastPracticed: "2026-09-30", nextReviewDue: "2026-10-02", confidence: "medium" },
   { topicId: "bio-genetics", status: "review", masteryProbability: 0.52, trend: "down", questionsAttempted: 17, lastPracticed: "2026-09-22", nextReviewDue: "2026-10-02", confidence: "low" },
@@ -411,12 +415,11 @@ export const tutorIntro: ChatMessage[] = [
 ];
 
 // ---- Revision queue -------------------------------------------------------
-
+// Biology/Chemistry still queue from this static list — RevisionQueuePage
+// merges these with the live FSRS-scheduled items for Math/English.
 export const revisionQueue: RevisionItem[] = [
-  { id: "rev-1", subjectId: "math", topicId: "math-algebra-simeq", topicName: "Simultaneous Equations", reason: "Due for review today", estimatedMinutes: 6, mode: "mini-quiz", urgencyRank: 1 },
   { id: "rev-2", subjectId: "chemistry", topicId: "chem-stoich", topicName: "Stoichiometry basics", reason: "Struggling recently", estimatedMinutes: 8, mode: "worked-problem", urgencyRank: 2 },
   { id: "rev-3", subjectId: "biology", topicId: "bio-genetics", topicName: "Genetics vocabulary", reason: "Confidence dipped last week", estimatedMinutes: 5, mode: "flashcard", urgencyRank: 3 },
-  { id: "rev-4", subjectId: "math", topicId: "math-geometry-circles", topicName: "Circle Theorems", reason: "Not reviewed in 12 days", estimatedMinutes: 7, mode: "recap", urgencyRank: 4 },
 ];
 
 // ---- Parent portal ---------------------------------------------------------

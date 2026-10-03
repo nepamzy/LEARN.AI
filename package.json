@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:engine": "tsx scripts/verify-engine.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
     "clsx": "^2.1.1",
     "lucide-react": "^1.50.0",
     "react": "^19.2.8",
@@ -26,6 +28,7 @@
     "oxlint": "^1.81.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }

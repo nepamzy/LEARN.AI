@@ -18,6 +18,8 @@ export interface AppState {
   onboardingComplete: boolean;
   setOnboardingComplete: (v: boolean) => void;
   studentName: string;
+  /** Call after queuing an attempt offline so the sync indicator updates immediately. */
+  refreshPendingCount: () => void;
 }
 
 export const AppStateCtx = createContext<AppState | null>(null);

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { SyncState } from "../lib/types";
 import { loadLocal, saveLocal } from "../lib/storage";
 import { amara } from "../lib/mockData";
+import { queueLength, flushQueue } from "../lib/api/offlineQueue";
+import { resubmitQueuedAttempt } from "../lib/api/liveData";
 import { AppStateCtx, type AppState, type Preferences } from "./appStateTypes";
 
 const defaultPrefs: Preferences = {
@@ -14,19 +16,41 @@ const defaultPrefs: Preferences = {
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefsState] = useState<Preferences>(() => loadLocal("prefs", defaultPrefs));
-  const [simulateOffline, setSimulateOffline] = useState(false);
+  const [simulateOffline, setSimulateOfflineState] = useState(false);
   const [browserOnline, setBrowserOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [onboardingComplete, setOnboardingCompleteState] = useState<boolean>(() => loadLocal("onboardingComplete", false));
+  const [pendingCount, setPendingCount] = useState(() => queueLength());
+  const [isSyncing, setIsSyncing] = useState(false);
+  const flushing = useRef(false);
+
+  // Flush any queued offline attempts, triggered directly by whatever event
+  // just brought us back online (never reactively from a derived effect).
+  const attemptFlush = useCallback(() => {
+    if (flushing.current || queueLength() === 0) return;
+    flushing.current = true;
+    setIsSyncing(true);
+    flushQueue(resubmitQueuedAttempt)
+      .then(({ remaining }) => setPendingCount(remaining))
+      .finally(() => {
+        flushing.current = false;
+        setIsSyncing(false);
+      });
+  }, []);
 
   useEffect(() => {
-    const on = () => setBrowserOnline(true);
+    const on = () => {
+      setBrowserOnline(true);
+      attemptFlush();
+    };
     const off = () => setBrowserOnline(false);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
+    if (navigator.onLine) attemptFlush(); // pick up anything queued from a previous session
     return () => {
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -42,15 +66,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     saveLocal("onboardingComplete", v);
   };
 
-  const isOnline = browserOnline && !simulateOffline;
+  const setSimulateOffline = (v: boolean) => {
+    setSimulateOfflineState(v);
+    if (!v) attemptFlush(); // leaving simulated-offline mode is also "back online"
+  };
 
-  const sync: SyncState = useMemo(
-    () => ({
-      status: isOnline ? "online" : "offline",
-      pendingChanges: isOnline ? 0 : 2,
-    }),
-    [isOnline]
-  );
+  const isOnline = browserOnline && !simulateOffline;
+  const refreshPendingCount = useCallback(() => setPendingCount(queueLength()), []);
+
+  const sync: SyncState = {
+    status: !isOnline ? "offline" : isSyncing ? "syncing" : "online",
+    pendingChanges: pendingCount,
+  };
 
   const value: AppState = {
     prefs,
@@ -61,6 +88,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     onboardingComplete,
     setOnboardingComplete,
     studentName: amara.name,
+    refreshPendingCount,
   };
 
   return <AppStateCtx.Provider value={value}>{children}</AppStateCtx.Provider>;

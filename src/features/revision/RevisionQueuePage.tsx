@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Layers, HelpCircle, Calculator, FileText, StopCircle } from "lucide-react";
 import { revisionQueue, getSubject, sampleQuestions } from "../../lib/mockData";
-import type { RevisionItem } from "../../lib/types";
+import { isLiveSubject } from "../../lib/supabase";
+import { fetchLiveRevisionQueue, fetchLiveQuestionForTopic } from "../../lib/api/liveData";
+import { todayISODate } from "../../lib/dates";
+import type { Question, RevisionItem } from "../../lib/types";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
 import { minutesToLabel } from "../../lib/utils";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { ListSkeleton } from "../../components/ui/Skeleton";
 
 const modeConfig: Record<RevisionItem["mode"], { icon: typeof Layers; label: string }> = {
   flashcard: { icon: Layers, label: "Flashcards" },
@@ -17,18 +21,40 @@ const modeConfig: Record<RevisionItem["mode"], { icon: typeof Layers; label: str
 
 export function RevisionQueuePage() {
   const navigate = useNavigate();
-  const [queue] = useState(revisionQueue);
+  const [queue, setQueue] = useState<RevisionItem[] | null>(null);
   const [index, setIndex] = useState<number | null>(null);
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const [flipped, setFlipped] = useState(false);
 
-  const totalMinutes = queue.reduce((s, q) => s + q.estimatedMinutes, 0);
-  const allDone = queue.length > 0 && completed.size === queue.length;
+  useEffect(() => {
+    let cancelled = false;
+    fetchLiveRevisionQueue(todayISODate())
+      .then((liveItems) => {
+        if (cancelled) return;
+        const combined = [...liveItems, ...revisionQueue].map((item, i) => ({ ...item, urgencyRank: i + 1 }));
+        setQueue(combined);
+      })
+      .catch(() => !cancelled && setQueue(revisionQueue));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const totalMinutes = (queue ?? []).reduce((s, q) => s + q.estimatedMinutes, 0);
+  const allDone = !!queue && queue.length > 0 && completed.size === queue.length;
 
   function finishItem(id: string) {
     setCompleted((c) => new Set(c).add(id));
     setFlipped(false);
     setIndex(null);
+  }
+
+  if (!queue) {
+    return (
+      <div className="pb-6 pt-2 max-w-lg">
+        <ListSkeleton rows={3} />
+      </div>
+    );
   }
 
   if (queue.length === 0) {
@@ -122,7 +148,22 @@ function ReviewItemScreen({
   onDone: () => void;
   onExit: () => void;
 }) {
-  const question = sampleQuestions.find((q) => q.topicId === item.topicId);
+  const live = isLiveSubject(item.subjectId);
+  const [liveQuestion, setLiveQuestion] = useState<Question | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    fetchLiveQuestionForTopic(item.topicId)
+      .then((q) => !cancelled && setLiveQuestion(q ?? null))
+      .catch(() => !cancelled && setLiveQuestion(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [live, item.topicId]);
+
+  const question = live ? liveQuestion : sampleQuestions.find((q) => q.topicId === item.topicId);
+  const loadingQuestion = live && liveQuestion === undefined && (item.mode === "mini-quiz" || item.mode === "worked-problem");
 
   return (
     <div className="pb-6 pt-2 max-w-lg space-y-4">
@@ -141,16 +182,18 @@ function ReviewItemScreen({
           </button>
         )}
 
-        {item.mode === "mini-quiz" && question && (
+        {loadingQuestion && <div className="h-20 rounded-xl bg-[#EDEBE3] animate-pulse-soft" aria-hidden="true" />}
+
+        {!loadingQuestion && item.mode === "mini-quiz" && question && (
           <div className="space-y-3">
             <p className="text-[16px] font-semibold text-ink">{question.prompt}</p>
             <p className="text-sm text-ink-secondary">{question.explanation}</p>
           </div>
         )}
 
-        {item.mode === "worked-problem" && (
+        {!loadingQuestion && item.mode === "worked-problem" && (
           <p className="text-[15px] text-ink leading-relaxed">
-            {question?.workedExample ?? "Work through a similar problem step by step, checking each line before moving to the next."}
+            {question?.workedExample ?? question?.explanation ?? "Work through a similar problem step by step, checking each line before moving to the next."}
           </p>
         )}
 
