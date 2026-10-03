@@ -7,6 +7,7 @@ import { FeedbackSheet } from "./components/FeedbackSheet";
 import { Modal } from "../../components/ui/Modal";
 import { Button } from "../../components/ui/Button";
 import { classifyMistake } from "./mistakeClassifier";
+import { nowMs } from "../../lib/dates";
 import type { PracticeAttempt } from "../../lib/types";
 
 interface NavState {
@@ -35,12 +36,12 @@ export function PracticeSessionPage() {
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [exitOpen, setExitOpen] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(20 * 60);
-  const questionStart = useRef(Date.now());
+  const questionStart = useRef(0);
 
   const question = questions[index];
 
   useEffect(() => {
-    questionStart.current = Date.now();
+    questionStart.current = nowMs();
   }, [index]);
 
   useEffect(() => {
@@ -52,14 +53,18 @@ export function PracticeSessionPage() {
   function toggleFlag() {
     setFlagged((f) => {
       const next = new Set(f);
-      next.has(question.id) ? next.delete(question.id) : next.add(question.id);
+      if (next.has(question.id)) {
+        next.delete(question.id);
+      } else {
+        next.add(question.id);
+      }
       return next;
     });
   }
 
   function submitAnswer() {
     if (!selected) return;
-    const timeSeconds = Math.round((Date.now() - questionStart.current) / 1000);
+    const timeSeconds = Math.round((nowMs() - questionStart.current) / 1000);
     const isCorrect = selected === question.correctOptionId;
     const mistakeType = isCorrect ? undefined : classifyMistake(timeSeconds);
     setAttempts((a) => [

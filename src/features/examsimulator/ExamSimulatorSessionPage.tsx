@@ -49,7 +49,11 @@ export function ExamSimulatorSessionPage() {
   function toggleFlag(id: string) {
     setFlagged((f) => {
       const next = new Set(f);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }

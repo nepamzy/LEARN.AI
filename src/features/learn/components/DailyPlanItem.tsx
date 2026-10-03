@@ -7,7 +7,7 @@ import { Card } from "../../../components/ui/Card";
 import { DueTag } from "../../../components/ui/StatusTag";
 import { Button } from "../../../components/ui/Button";
 import { minutesToLabel } from "../../../lib/utils";
-import { useToast } from "../../../components/ui/Toast";
+import { useToast } from "../../../components/ui/useToast";
 
 const kindIcon = {
   revision: BookOpen,

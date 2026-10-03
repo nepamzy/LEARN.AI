@@ -6,8 +6,8 @@ import { Switch } from "../../components/ui/Switch";
 import { Select, TextInput } from "../../components/ui/Input";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
-import { useAppState } from "../../state/AppStateContext";
-import { useToast } from "../../components/ui/Toast";
+import { useAppState } from "../../state/useAppState";
+import { useToast } from "../../components/ui/useToast";
 import { loadLocal } from "../../lib/storage";
 
 export function ProfilePage() {

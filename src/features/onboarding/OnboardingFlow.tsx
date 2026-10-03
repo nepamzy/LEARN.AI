@@ -12,9 +12,9 @@ import { AccessibilityStep } from "./steps/AccessibilityStep";
 import { NotificationsStep } from "./steps/NotificationsStep";
 import { ConsentStep } from "./steps/ConsentStep";
 import { CompleteStep } from "./steps/CompleteStep";
-import { useAppState } from "../../state/AppStateContext";
+import { useAppState } from "../../state/useAppState";
 import { loadLocal, removeLocal, saveLocal } from "../../lib/storage";
-import { useToast } from "../../components/ui/Toast";
+import { useToast } from "../../components/ui/useToast";
 
 const STEP_IDS = [
   "welcome",

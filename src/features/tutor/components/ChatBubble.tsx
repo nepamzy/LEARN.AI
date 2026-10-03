@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Compass, Sparkles, Volume2, Wand2, HelpCircle, BookmarkPlus, ListChecks } from "lucide-react";
 import type { ChatMessage } from "../../../lib/types";
 import { cx } from "../../../lib/utils";
-import { useToast } from "../../../components/ui/Toast";
+import { useToast } from "../../../components/ui/useToast";
 
 interface Props {
   message: ChatMessage;

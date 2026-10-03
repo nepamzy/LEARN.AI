@@ -1,26 +1,8 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { FontSize, Language, SyncState } from "../lib/types";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { SyncState } from "../lib/types";
 import { loadLocal, saveLocal } from "../lib/storage";
 import { amara } from "../lib/mockData";
-
-interface Preferences {
-  language: Language;
-  fontSize: FontSize;
-  reducedMotion: boolean;
-  lowDataMode: boolean;
-  notificationsEnabled: boolean | null; // null = not yet decided
-}
-
-interface AppState {
-  prefs: Preferences;
-  setPrefs: (patch: Partial<Preferences>) => void;
-  sync: SyncState;
-  simulateOffline: boolean;
-  setSimulateOffline: (v: boolean) => void;
-  onboardingComplete: boolean;
-  setOnboardingComplete: (v: boolean) => void;
-  studentName: string;
-}
+import { AppStateCtx, type AppState, type Preferences } from "./appStateTypes";
 
 const defaultPrefs: Preferences = {
   language: amara.language,
@@ -29,8 +11,6 @@ const defaultPrefs: Preferences = {
   lowDataMode: amara.lowDataMode,
   notificationsEnabled: null,
 };
-
-const AppStateCtx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefsState] = useState<Preferences>(() => loadLocal("prefs", defaultPrefs));
@@ -84,10 +64,4 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   };
 
   return <AppStateCtx.Provider value={value}>{children}</AppStateCtx.Provider>;
-}
-
-export function useAppState(): AppState {
-  const ctx = useContext(AppStateCtx);
-  if (!ctx) throw new Error("useAppState must be used within AppStateProvider");
-  return ctx;
 }

@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { CalendarX2 } from "lucide-react";
 import { Button } from "../../../components/ui/Button";
 import { TextInput } from "../../../components/ui/Input";
+import { todayISODate } from "../../../lib/dates";
 
 interface Props {
   value: string;
@@ -12,7 +14,7 @@ interface Props {
 }
 
 export function DateStep({ value, unknown, onChangeDate, onToggleUnknown, onNext, error }: Props) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = useMemo(() => todayISODate(), []);
 
   return (
     <div className="space-y-5">

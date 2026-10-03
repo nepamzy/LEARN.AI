@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppShell } from "./components/layout/AppShell";
-import { AppStateProvider, useAppState } from "./state/AppStateContext";
+import { AppStateProvider } from "./state/AppStateContext";
+import { useAppState } from "./state/useAppState";
 import { ToastProvider } from "./components/ui/Toast";
 
 import { OnboardingFlow } from "./features/onboarding/OnboardingFlow";

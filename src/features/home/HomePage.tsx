@@ -11,7 +11,7 @@ import { SubjectMasteryCard } from "../../components/domain/SubjectMasteryCard";
 import { InsightCard } from "../../components/domain/InsightCard";
 import { ListSkeleton } from "../../components/ui/Skeleton";
 import { Banner } from "../../components/ui/Banner";
-import { useAppState } from "../../state/AppStateContext";
+import { useAppState } from "../../state/useAppState";
 import { WifiOff, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import { loadLocal } from "../../lib/storage";
@@ -30,7 +30,11 @@ export function HomePage() {
   function toggleTask(id: string) {
     setCompletedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }

@@ -8,8 +8,8 @@ import { ToneSelector } from "./components/ToneSelector";
 import { generateTutorReply, promptSuggestions, DAILY_FREE_MESSAGE_LIMIT, type TutorTone } from "./tutorEngine";
 import { Banner } from "../../components/ui/Banner";
 import { Button } from "../../components/ui/Button";
-import { useAppState } from "../../state/AppStateContext";
-import { useToast } from "../../components/ui/Toast";
+import { useAppState } from "../../state/useAppState";
+import { useToast } from "../../components/ui/useToast";
 
 export function TutorPage() {
   const { sync } = useAppState();

@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { cx } from "../../../lib/utils";
+import { getStartOfToday } from "../../../lib/dates";
 
 interface DayInfo {
   date: Date;
@@ -14,8 +16,7 @@ interface Props {
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 
 export function WeekStrip({ days, selectedIndex, onSelect }: Props) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = useMemo(() => getStartOfToday(), []);
 
   return (
     <div role="tablist" aria-label="Select a day" className="grid grid-cols-7 gap-1.5">

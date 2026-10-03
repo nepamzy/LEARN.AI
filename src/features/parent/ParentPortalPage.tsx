@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/Button";
 import { Select } from "../../components/ui/Input";
 import { Banner } from "../../components/ui/Banner";
 import { formatDate, minutesToLabel } from "../../lib/utils";
-import { useToast } from "../../components/ui/Toast";
+import { useToast } from "../../components/ui/useToast";
 
 export function ParentPortalPage() {
   const { show } = useToast();

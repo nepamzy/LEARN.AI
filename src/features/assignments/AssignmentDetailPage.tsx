@@ -19,7 +19,7 @@ export function AssignmentDetailPage() {
   const [typedText, setTypedText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [ocrText, setOcrText] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
+  const [submittedAt, setSubmittedAt] = useState<Date | null>(null);
 
   if (!assignment) {
     return (
@@ -38,7 +38,7 @@ export function AssignmentDetailPage() {
   const topic = assignment.topicId ? getTopic(assignment.topicId) : undefined;
   const canSubmit = (method === "type" && typedText.trim().length > 0) || (method === "file" && !!file) || (method === "photo" && !!ocrText);
 
-  if (submitted) {
+  if (submittedAt) {
     return (
       <Card className="max-w-lg mx-auto text-center space-y-4 py-8">
         <span className="mx-auto size-14 rounded-full bg-sage-surface flex items-center justify-center">
@@ -47,7 +47,7 @@ export function AssignmentDetailPage() {
         <div>
           <h2 className="text-xl font-bold text-ink">Submitted</h2>
           <p className="text-[15px] text-ink-secondary mt-1">
-            "{assignment.title}" was submitted on {new Date().toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
+            "{assignment.title}" was submitted on {submittedAt.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
           </p>
         </div>
         <p className="text-sm text-ink-secondary">
@@ -125,7 +125,7 @@ export function AssignmentDetailPage() {
         {method === "photo" && <SubmissionPhotoOCR onConfirmed={setOcrText} />}
       </Card>
 
-      <Button size="lg" fullWidth disabled={!canSubmit} onClick={() => setSubmitted(true)}>
+      <Button size="lg" fullWidth disabled={!canSubmit} onClick={() => setSubmittedAt(new Date())}>
         Submit assignment
       </Button>
     </div>

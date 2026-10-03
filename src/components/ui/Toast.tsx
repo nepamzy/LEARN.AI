@@ -1,21 +1,14 @@
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { CheckCircle2, Info, AlertTriangle, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { cx } from "../../lib/utils";
-
-type ToastTone = "success" | "info" | "warning" | "error";
+import { ToastContext, type ToastTone } from "./toastContext";
 
 interface ToastItem {
   id: string;
   message: string;
   tone: ToastTone;
 }
-
-interface ToastContextValue {
-  show: (message: string, tone?: ToastTone) => void;
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null);
 
 const toneConfig: Record<ToastTone, { icon: ReactNode; classes: string }> = {
   success: { icon: <CheckCircle2 className="size-5" aria-hidden="true" />, classes: "bg-success-surface text-success border-success/20" },
@@ -76,10 +69,4 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       )}
     </ToastContext.Provider>
   );
-}
-
-export function useToast(): ToastContextValue {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used within ToastProvider");
-  return ctx;
 }

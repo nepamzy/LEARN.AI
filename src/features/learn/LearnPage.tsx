@@ -9,23 +9,24 @@ import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { CalendarCheck2 } from "lucide-react";
 import { minutesToLabel } from "../../lib/utils";
+import { getStartOfToday } from "../../lib/dates";
 import type { PlanTask } from "../../lib/types";
 
-function buildWeek() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+function buildWeek(today: Date, todayTaskCount: number) {
+  const todayIndex = today.getDay();
   const start = new Date(today);
-  start.setDate(today.getDate() - today.getDay());
+  start.setDate(today.getDate() - todayIndex);
   return Array.from({ length: 7 }).map((_, i) => {
     const date = new Date(start);
     date.setDate(start.getDate() + i);
-    return { date, taskCount: i === today.getDay() ? todayPlan.length : 0 };
+    return { date, taskCount: i === todayIndex ? todayTaskCount : 0 };
   });
 }
 
 export function LearnPage() {
-  const week = useMemo(buildWeek, []);
-  const todayIndex = new Date().getDay();
+  const today = useMemo(() => getStartOfToday(), []);
+  const todayIndex = today.getDay();
+  const week = useMemo(() => buildWeek(today, todayPlan.length), [today]);
   const [selectedIndex, setSelectedIndex] = useState(todayIndex);
   const [buildOpen, setBuildOpen] = useState(false);
   const [whyTask, setWhyTask] = useState<PlanTask | null>(null);

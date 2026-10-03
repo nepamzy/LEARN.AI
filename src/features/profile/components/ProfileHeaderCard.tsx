@@ -1,4 +1,4 @@
-import { amara, subjects, getSubject } from "../../../lib/mockData";
+import { amara, getSubject } from "../../../lib/mockData";
 import { Card } from "../../../components/ui/Card";
 import { StatusTag } from "../../../components/ui/StatusTag";
 import { SubjectDot } from "../../../components/ui/SubjectDot";
@@ -30,5 +30,3 @@ export function ProfileHeaderCard() {
     </Card>
   );
 }
-
-export const allSubjects = subjects;

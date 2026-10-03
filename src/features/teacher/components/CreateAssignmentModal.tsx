@@ -4,7 +4,7 @@ import { Button } from "../../../components/ui/Button";
 import { Select, TextInput } from "../../../components/ui/Input";
 import { StatusTag } from "../../../components/ui/StatusTag";
 import { classes, heatmapTopics } from "../teacherData";
-import { useToast } from "../../../components/ui/Toast";
+import { useToast } from "../../../components/ui/useToast";
 
 export function CreateAssignmentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { show } = useToast();
