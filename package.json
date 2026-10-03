@@ -9,7 +9,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "verify:engine": "tsx scripts/verify-engine.ts",
-    "verify:ai": "tsx scripts/verify-ai.ts"
+    "verify:ai": "tsx scripts/verify-ai.ts",
+    "dev:ai-mock": "tsx scripts/mock-ai-proxy.ts",
+    "test:browser": "node scripts/browser-smoke.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
@@ -27,6 +29,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "oxlint": "^1.81.0",
+    "playwright": "^1.63.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",

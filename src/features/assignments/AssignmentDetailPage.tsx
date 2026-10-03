@@ -9,7 +9,16 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { SubmissionTypeResponse } from "./components/SubmissionTypeResponse";
 import { SubmissionFileUpload } from "./components/SubmissionFileUpload";
 import { SubmissionPhotoOCR } from "./components/SubmissionPhotoOCR";
+import { GradingFeedback, type GradingState } from "./components/GradingFeedback";
 import { formatDate, minutesToLabel } from "../../lib/utils";
+import { gradeSubmission } from "../../lib/ai/grading";
+import { isAiConfigured } from "../../lib/ai/proxyClient";
+import { clearPendingGrading, getPendingGrading, queuePendingGrading } from "../../lib/ai/gradingQueue";
+import { AiUnavailableError, type GradingRequest } from "../../lib/ai/types";
+
+function currentTime(): Date {
+  return new Date();
+}
 
 export function AssignmentDetailPage() {
   const { id } = useParams();
@@ -20,6 +29,8 @@ export function AssignmentDetailPage() {
   const [file, setFile] = useState<File | null>(null);
   const [ocrText, setOcrText] = useState<string | null>(null);
   const [submittedAt, setSubmittedAt] = useState<Date | null>(null);
+  const [grading, setGrading] = useState<GradingState | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   if (!assignment) {
     return (
@@ -38,27 +49,72 @@ export function AssignmentDetailPage() {
   const topic = assignment.topicId ? getTopic(assignment.topicId) : undefined;
   const canSubmit = (method === "type" && typedText.trim().length > 0) || (method === "file" && !!file) || (method === "photo" && !!ocrText);
 
+  async function markWork(assignmentId: string, request: GradingRequest) {
+    setRetrying(true);
+    try {
+      const result = await gradeSubmission(request);
+      clearPendingGrading(assignmentId);
+      setGrading({ status: "graded", result });
+    } catch (err) {
+      setGrading(err instanceof AiUnavailableError ? { status: "pending", reason: "not-configured" } : { status: "failed" });
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  function handleSubmit() {
+    const now = currentTime();
+    setSubmittedAt(now);
+    const studentText = method === "type" ? typedText.trim() : method === "photo" ? (ocrText ?? "") : "";
+    if (!studentText) {
+      setGrading({ status: "pending", reason: "file" });
+      return;
+    }
+    const request: GradingRequest = {
+      assignmentTitle: assignment!.title,
+      objective: assignment!.objective,
+      rubric: assignment!.rubric,
+      studentText,
+    };
+    queuePendingGrading({ assignmentId: assignment!.id, request, submittedAt: now.toISOString() });
+    if (!isAiConfigured()) {
+      setGrading({ status: "pending", reason: "not-configured" });
+      return;
+    }
+    void markWork(assignment!.id, request);
+  }
+
+  function retryGrading() {
+    const job = getPendingGrading(assignment!.id);
+    if (job) void markWork(assignment!.id, job.request);
+  }
+
   if (submittedAt) {
     return (
-      <Card className="max-w-lg mx-auto text-center space-y-4 py-8">
-        <span className="mx-auto size-14 rounded-full bg-sage-surface flex items-center justify-center">
-          <CheckCircle2 className="size-7 text-sage" aria-hidden="true" />
-        </span>
-        <div>
-          <h2 className="text-xl font-bold text-ink">Submitted</h2>
-          <p className="text-[15px] text-ink-secondary mt-1">
-            "{assignment.title}" was submitted on {submittedAt.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
-          </p>
-        </div>
-        <p className="text-sm text-ink-secondary">
-          {assignment.source === "ai"
-            ? "Astra will mark this shortly — usually within a few minutes."
-            : "Your teacher will review this before marks are finalised."}
-        </p>
+      <div className="max-w-lg mx-auto space-y-4 pt-2 pb-6">
+        <Card className="text-center space-y-4 py-8">
+          <span className="mx-auto size-14 rounded-full bg-sage-surface flex items-center justify-center">
+            <CheckCircle2 className="size-7 text-sage" aria-hidden="true" />
+          </span>
+          <div>
+            <h2 className="text-xl font-bold text-ink">Submitted</h2>
+            <p className="text-[15px] text-ink-secondary mt-1">
+              "{assignment.title}" was submitted on {submittedAt.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
+            </p>
+          </div>
+          {assignment.source === "teacher" && (
+            <p className="text-sm text-ink-secondary">Your teacher will review this before marks are finalised.</p>
+          )}
+        </Card>
+
+        {grading && (
+          <GradingFeedback state={grading} rubric={assignment.rubric} onRetry={retryGrading} retrying={retrying} />
+        )}
+
         <Button fullWidth onClick={() => navigate("/assignments")}>
           Back to assignments
         </Button>
-      </Card>
+      </div>
     );
   }
 
@@ -125,7 +181,7 @@ export function AssignmentDetailPage() {
         {method === "photo" && <SubmissionPhotoOCR onConfirmed={setOcrText} />}
       </Card>
 
-      <Button size="lg" fullWidth disabled={!canSubmit} onClick={() => setSubmittedAt(new Date())}>
+      <Button size="lg" fullWidth disabled={!canSubmit} onClick={handleSubmit}>
         Submit assignment
       </Button>
     </div>
