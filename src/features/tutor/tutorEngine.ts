@@ -1,13 +1,14 @@
-// Stand-in for the real tutoring backend: canned, context-aware replies so the
-// chat feels responsive and on-topic without a live model behind it.
+import { callProxy, isAiConfigured } from "../../lib/ai/proxyClient";
+import { AiUnavailableError, type TutorRequest, type TutorTone, type TutorTurn } from "../../lib/ai/types";
 
-export type TutorTone = "concise" | "guided" | "visual" | "step-by-step";
+export type { TutorTone, TutorTurn } from "../../lib/ai/types";
 
 function pick(a: string, b: string, tone: TutorTone) {
   return tone === "concise" ? a : b;
 }
 
-export function generateTutorReply(userMessage: string, tone: TutorTone): string {
+// Canned replies used when no AI proxy is configured, so the chat still works offline.
+function cannedReply(userMessage: string, tone: TutorTone): string {
   const msg = userMessage.toLowerCase();
 
   if (msg.includes("simultaneous")) {
@@ -35,6 +36,24 @@ export function generateTutorReply(userMessage: string, tone: TutorTone): string
     "That's a good question. Before I explain — what do you think happens first, based on what we covered last time?",
     tone
   );
+}
+
+const HISTORY_TURNS = 6;
+
+export async function generateTutorReply(message: string, tone: TutorTone, history: TutorTurn[] = []): Promise<string> {
+  if (!isAiConfigured()) {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    return cannedReply(message, tone);
+  }
+
+  const request: TutorRequest = {
+    message,
+    tone,
+    history: history.slice(-HISTORY_TURNS),
+  };
+  const { text } = await callProxy<{ text: string }>("tutor", request);
+  if (typeof text !== "string" || !text.trim()) throw new AiUnavailableError("Empty tutor reply");
+  return text;
 }
 
 export const promptSuggestions = [

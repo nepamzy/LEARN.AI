@@ -44,22 +44,20 @@ export function TutorPage() {
     setMessagesSentToday((n) => n + 1);
     scrollToBottom();
 
-    setTimeout(() => {
-      setTyping(false);
-      const shouldFail = Math.random() < 0.08;
-      if (shouldFail) {
-        setFailed(true);
-        return;
-      }
-      const reply: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "tutor",
-        content: generateTutorReply(text, tone),
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((m) => [...m, reply]);
-      scrollToBottom();
-    }, 1100);
+    const history = messages.map((m) => ({ role: m.role, content: m.content }));
+    generateTutorReply(text.trim(), tone, history)
+      .then((content) => {
+        const reply: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "tutor",
+          content,
+          timestamp: new Date().toISOString(),
+        };
+        setMessages((m) => [...m, reply]);
+        scrollToBottom();
+      })
+      .catch(() => setFailed(true))
+      .finally(() => setTyping(false));
   }
 
   function handleResponseAction(action: string) {

@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "verify:engine": "tsx scripts/verify-engine.ts"
+    "verify:engine": "tsx scripts/verify-engine.ts",
+    "verify:ai": "tsx scripts/verify-ai.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
