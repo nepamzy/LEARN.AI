@@ -18,15 +18,62 @@ function record(name, ok, detail = "") {
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
+// In-memory stand-in for the graded_submissions table behind Supabase's REST API.
+// Intercepting it means these tests never write to the real database.
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "*",
+  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+};
+
+function installGradedSubmissionsFake(context) {
+  const store = { rows: [], failWrites: false, failReads: false, writes: 0 };
+  context.route("**/rest/v1/graded_submissions**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    if (req.method() === "POST") {
+      if (store.failWrites) {
+        return route.fulfill({ status: 500, headers: CORS, contentType: "application/json", body: JSON.stringify({ message: "simulated write failure" }) });
+      }
+      const body = JSON.parse(req.postData() ?? "[]");
+      for (const r of Array.isArray(body) ? body : [body]) {
+        if (!store.rows.some((x) => x.id === r.id)) store.rows.push(r);
+      }
+      store.writes++;
+      return route.fulfill({ status: 201, headers: CORS, contentType: "application/json", body: "" });
+    }
+    if (req.method() === "GET") {
+      if (store.failReads) {
+        return route.fulfill({ status: 500, headers: CORS, contentType: "application/json", body: JSON.stringify({ message: "simulated read failure" }) });
+      }
+      const url = new URL(req.url());
+      const assignmentId = url.searchParams.get("assignment_id")?.replace(/^eq\./, "");
+      const rows = store.rows
+        .filter((r) => !assignmentId || r.assignment_id === assignmentId)
+        .sort((a, b) => b.graded_at.localeCompare(a.graded_at))
+        .slice(0, 1);
+      return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(rows) });
+    }
+    return route.continue();
+  });
+  return store;
+}
+
 async function newPage(browser) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await context.addInitScript(() => {
     localStorage.setItem("astra:onboardingComplete", "true");
   });
+  const store = installGradedSubmissionsFake(context);
+  const proxy = { calls: 0 };
+  context.route("http://localhost:8787/**", (route) => {
+    proxy.calls++;
+    return route.continue();
+  });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  return { context, page, errors };
+  return { context, page, errors, store, proxy };
 }
 
 async function expectText(page, text, timeout = 10000) {
@@ -81,7 +128,7 @@ if (!NOT_CONFIGURED) {
 
   console.log("\nAssignment grading success");
   {
-    const { context, page, errors } = await newPage(browser);
+    const { context, page, errors, store } = await newPage(browser);
     await page.goto(`${APP_URL}/assignments/asg-1`);
     await page.getByLabel("Your response").fill(
       "Qualitative education builds critical thinking, which national development depends on. For example, graduates who can reason through problems drive better policy."
@@ -90,6 +137,11 @@ if (!NOT_CONFIGURED) {
     record("AI feedback heading is shown after submit", await expectText(page, "AI practice feedback"));
     record("feedback is labelled as guidance, not an official grade", await expectText(page, "not an official grade"));
     record("criterion feedback from the proxy is rendered", await expectText(page, "Mock feedback for criterion"));
+    record("the graded submission is written to graded_submissions", store.rows.length === 1, `${store.rows.length} row(s)`);
+    record(
+      "the saved row is for this assignment and carries the grade shown",
+      store.rows[0]?.assignment_id === "asg-1" && store.rows[0]?.submission_method === "type" && store.rows[0]?.total_score === 22 && store.rows[0]?.max_score === 40
+    );
     await page.screenshot({ path: join(SHOTS, "grading-success.png"), fullPage: true });
     record("no uncaught page errors", errors.length === 0, errors.join(" | "));
     await context.close();
@@ -105,6 +157,108 @@ if (!NOT_CONFIGURED) {
     record("retry is offered", await expectText(page, "Try again", 2000));
     record("no score is fabricated", !(await expectText(page, "AI practice feedback", 1000)));
     await page.screenshot({ path: join(SHOTS, "grading-failure.png"), fullPage: true });
+    await context.close();
+  }
+
+  console.log("\nSave failure does not show an unsaved grade (Phase 5)");
+  {
+    const { context, page, store, proxy } = await newPage(browser);
+    store.failWrites = true;
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    await page.getByLabel("Your response").fill("A typed answer whose grade should not appear until it is saved.");
+    await page.getByRole("button", { name: "Submit assignment" }).click();
+    record("a failed save shows a clear message", await expectText(page, "couldn't save the feedback yet"));
+    record("the grade is NOT shown when the save fails", !(await expectText(page, "AI practice feedback", 1500)));
+    record("the failed save offers a retry", await expectText(page, "Try again", 2000));
+    store.failWrites = false;
+    await page.getByRole("button", { name: "Try again" }).click();
+    record("retrying the save shows the grade", await expectText(page, "AI practice feedback"));
+    record("retrying the save does not re-grade (one AI call total)", proxy.calls === 1, `${proxy.calls} proxy call(s)`);
+    record("retrying the save writes exactly one row", store.rows.length === 1, `${store.rows.length} row(s)`);
+    await context.close();
+  }
+
+  console.log("\nReport page shows the saved live grade (Phase 5)");
+  {
+    const { context, page, errors, store } = await newPage(browser);
+    store.rows.push({
+      id: "seed-live-1",
+      student_id: "00000000-0000-4000-8000-000000000001",
+      assignment_id: "asg-1",
+      submission_method: "type",
+      submitted_text: "Seeded submission text.",
+      total_score: 13,
+      max_score: 40,
+      criteria: [{ criterionId: "r1", score: 9, feedback: "Seeded feedback from the saved grade.", quotes: [] }],
+      strengths: ["Seeded strength from the saved grade."],
+      improvements: [],
+      graded_at: "2026-10-04T12:00:00.000Z",
+    });
+    await page.goto(`${APP_URL}/assignments/asg-1/report`);
+    record("report shows the saved criterion feedback", await expectText(page, "Seeded feedback from the saved grade."));
+    record("report shows the saved strength", await expectText(page, "Seeded strength from the saved grade."));
+    record("report labels the mark as an AI practice mark", await expectText(page, "AI practice mark"));
+    record("report says it is not a teacher-approved grade", await expectText(page, "not a teacher-approved grade"));
+    record("the demo teacher override is not shown for a live grade", !(await expectText(page, "Teacher adjusted this mark", 1000)));
+    await page.screenshot({ path: join(SHOTS, "report-live.png"), fullPage: true });
+    record("no uncaught page errors on the live report", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+
+  console.log("\nReport page falls back to demo content only where nothing was graded live (Phase 5)");
+  {
+    const { context, page } = await newPage(browser);
+    await page.goto(`${APP_URL}/assignments/asg-3/report`);
+    record("demo report with no saved grade still renders its teacher-marked content", await expectText(page, "Teacher adjusted this mark"));
+    record("demo report is labelled as a total mark, not an AI mark", !(await expectText(page, "AI practice mark", 1000)));
+    await context.close();
+  }
+  {
+    const { context, page } = await newPage(browser);
+    await page.goto(`${APP_URL}/assignments/asg-1/report`);
+    record("an unsubmitted, unmarked assignment shows the still-being-reviewed state", await expectText(page, "still being reviewed"));
+    await context.close();
+  }
+  {
+    const { context, page, store } = await newPage(browser);
+    store.failReads = true;
+    await page.goto(`${APP_URL}/assignments/asg-3/report`);
+    record("a failed load shows an error with retry", await expectText(page, "We couldn't load this report"));
+    record("a failed load does NOT fall back to demo content", !(await expectText(page, "Teacher adjusted this mark", 1000)));
+    await context.close();
+  }
+
+  console.log("\nPDF from a live-graded report (Phase 5)");
+  {
+    const { context, page, errors, store } = await newPage(browser);
+    store.rows.push({
+      id: "seed-live-2",
+      student_id: "00000000-0000-4000-8000-000000000001",
+      assignment_id: "asg-1",
+      submission_method: "type",
+      submitted_text: "Seeded submission text.",
+      total_score: 13,
+      max_score: 40,
+      criteria: [{ criterionId: "r1", score: 9, feedback: "PDF seeded feedback.", quotes: [] }],
+      strengths: [],
+      improvements: [],
+      graded_at: "2026-10-04T12:00:00.000Z",
+    });
+    await page.goto(`${APP_URL}/assignments/asg-1/report`);
+    await expectText(page, "AI practice mark");
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 15000 }).catch(() => null),
+      page.getByRole("button", { name: /Download PDF report/ }).click(),
+    ]);
+    record("the live report can be downloaded as a PDF", !!download);
+    if (download) {
+      const bytes = (await download.path()) ? (await import("node:fs")).readFileSync(await download.path()) : Buffer.alloc(0);
+      const text = bytes.toString("latin1");
+      record("the PDF is a real PDF document", text.startsWith("%PDF"));
+      record("the PDF contains the AI practice mark label", text.includes("AI practice mark"));
+      record("the PDF contains the saved criterion feedback", text.includes("PDF seeded feedback"));
+    }
+    record("no uncaught page errors on the live PDF path", errors.length === 0, errors.join(" | "));
     await context.close();
   }
 

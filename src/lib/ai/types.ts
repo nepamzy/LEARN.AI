@@ -19,6 +19,8 @@ export interface RubricCriterion {
   maxScore: number;
 }
 
+export type SubmissionMethod = "type" | "photo";
+
 export interface GradingRequest {
   assignmentTitle: string;
   objective: string;

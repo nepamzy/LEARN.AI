@@ -10,6 +10,8 @@ import { utcWindowDate, isWithinLimit, isValidStudentId } from "../supabase/func
 import { isLowConfidence, LOW_CONFIDENCE_THRESHOLD } from "../src/lib/ocr/ocrEngine";
 import { buildReportSections } from "../src/lib/pdf/assignmentReport";
 import type { Assignment } from "../src/lib/types";
+import { recordToRow, rowToRecord, recordToReportAssignment, type GradedRecord } from "../src/lib/ai/gradedRecord";
+import { assignments } from "../src/lib/mockData";
 
 let passed = 0;
 let failed = 0;
@@ -131,6 +133,57 @@ const minimalAssignment: Assignment = { ...fullAssignment, teacherOverride: unde
 const minimalSections = buildReportSections(minimalAssignment, undefined);
 check("omits optional sections entirely when the assignment has no data for them (no fabricated content)", minimalSections.every((s) => s.heading !== "Strengths" && s.heading !== "Specific improvements" && s.heading !== "What to study next" && s.heading !== "What a stronger answer looks like"));
 check("the rubric section is still always present", minimalSections.some((s) => s.heading === "Rubric breakdown"));
+
+console.log("\nLive grade persistence mapping (Phase 5)");
+console.log("----------------------------------------");
+const liveRecord: GradedRecord = {
+  id: "11111111-1111-4111-8111-111111111111",
+  assignmentId: "asg-1",
+  submissionMethod: "type",
+  submittedText: "Qualitative education builds critical thinking.",
+  gradedAt: "2026-10-04T12:00:00.000Z",
+  result: {
+    criteria: [
+      { criterionId: "r1", score: 7, feedback: "Clear claim in the opening.", quotes: ["builds critical thinking"] },
+      { criterionId: "r2", score: 6, feedback: "Paragraphs follow a logical order.", quotes: [] },
+      { criterionId: "ghost", score: 1, feedback: "not in rubric", quotes: [] },
+    ],
+    totalScore: 13,
+    maxScore: 20,
+    strengths: ["Clear claim."],
+    improvements: ["Add a concrete example."],
+  },
+};
+const demoStudent = "00000000-0000-4000-8000-000000000001";
+const row = recordToRow(liveRecord, demoStudent);
+check("row carries the student id it was given (not the record's)", row.student_id === demoStudent);
+check("row maps totalScore and maxScore to total_score and max_score", row.total_score === 13 && row.max_score === 20);
+check("row keeps the submission method and graded timestamp", row.submission_method === "type" && row.graded_at === liveRecord.gradedAt);
+check("row round-trips back to the same record", JSON.stringify(rowToRecord(row)) === JSON.stringify(liveRecord));
+
+const mockBase = assignments.find((a) => a.id === "asg-1")!;
+const reportAssignment = recordToReportAssignment(liveRecord, mockBase);
+check("report assignment is marked returned so the report page renders it", reportAssignment.status === "returned");
+check("report assignment is marked as AI-marked, not teacher-marked", reportAssignment.markedBy === "ai");
+check("report rubric takes each criterion's live score", reportAssignment.rubric.find((r) => r.id === "r1")?.score === 7);
+check("report rubric takes each criterion's live feedback", reportAssignment.rubric.find((r) => r.id === "r2")?.feedback === "Paragraphs follow a logical order.");
+check("report keeps the mock rubric's names and maxima", reportAssignment.rubric.every((r, i) => r.name === mockBase.rubric[i].name && r.maxScore === mockBase.rubric[i].maxScore));
+check("a criterion absent from the grade stays unscored, not invented", reportAssignment.rubric.find((r) => r.id === "r4")?.score === undefined);
+check("report total comes from the live result", reportAssignment.totalScore === 13 && reportAssignment.maxScore === 20);
+check("no teacher override is fabricated for a live grade", reportAssignment.teacherOverride === undefined);
+check("no next steps are fabricated (grading pipeline doesn't produce them)", reportAssignment.nextSteps === undefined);
+check("no model answer is fabricated (grading pipeline doesn't produce it)", reportAssignment.modelAnswerExcerpt === undefined);
+
+const livePdf = buildReportSections(reportAssignment, "English Language");
+const livePdfText = livePdf.map((s) => `${s.heading}\n${s.lines.join("\n")}`).join("\n");
+check("live PDF labels the mark as an AI practice mark", livePdfText.includes("AI practice mark: 13/20"));
+check("live PDF does not present the AI score as a total mark", !livePdfText.includes("Total mark"));
+check("live PDF carries the live criterion scores and feedback", livePdfText.includes("Clear claim in the opening."));
+check("live PDF omits the next-steps section it has no data for", !livePdf.some((s) => s.heading === "What to study next"));
+
+const mockPdf = buildReportSections(mockBase, "English Language");
+const mockPdfText = mockPdf.map((s) => `${s.heading}\n${s.lines.join("\n")}`).join("\n");
+check("fallback PDF for unmarked demo content still says Total mark", mockPdfText.includes("Total mark:") && !mockPdfText.includes("AI practice mark"));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

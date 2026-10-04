@@ -1,12 +1,18 @@
 import { loadLocal, saveLocal } from "../storage";
-import type { GradingRequest } from "./types";
+import type { GradingRequest, GradingResult, SubmissionMethod } from "./types";
 
-// Submissions waiting for AI feedback, kept on-device until the proxy can mark them.
-// One pending job per assignment: a resubmission replaces the earlier one.
+// A submission on its way to a saved grade. Kept on-device until the grade is
+// persisted. `result` is set once the AI has marked it, so a failed save can be
+// retried without paying for a second grade. `recordId` is reused on retry so
+// the save stays idempotent. One job per assignment: a resubmission replaces it.
 export interface PendingGrading {
   assignmentId: string;
   request: GradingRequest;
   submittedAt: string;
+  submissionMethod: SubmissionMethod;
+  recordId: string;
+  result?: GradingResult;
+  gradedAt?: string;
 }
 
 const KEY = "pendingGrading";

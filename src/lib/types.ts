@@ -153,6 +153,7 @@ export interface Assignment {
     comment: string;
     status: "approved" | "adjusted";
   };
+  markedBy?: "ai" | "teacher";
   strengths?: string[];
   improvements?: string[];
   nextSteps?: string[];

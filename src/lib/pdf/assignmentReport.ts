@@ -36,7 +36,10 @@ export function buildReportSections(assignment: Assignment, subjectName: string 
   const sections: ReportSection[] = [
     {
       heading: assignment.title,
-      lines: [subjectName ?? "", `Total mark: ${finalScore}/${assignment.maxScore} (${pct}%)`].filter(Boolean),
+      lines: [
+        subjectName ?? "",
+        `${assignment.markedBy === "ai" ? "AI practice mark" : "Total mark"}: ${finalScore}/${assignment.maxScore} (${pct}%)`,
+      ].filter(Boolean),
     },
   ];
 

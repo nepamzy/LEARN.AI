@@ -7,7 +7,8 @@ import { Banner } from "../../../components/ui/Banner";
 export type GradingState =
   | { status: "pending"; reason: "not-configured" | "file" | "waiting" }
   | { status: "graded"; result: GradingResult }
-  | { status: "failed"; reason?: "rate-limited" };
+  | { status: "failed"; reason?: "rate-limited" }
+  | { status: "save-failed" };
 
 interface Props {
   state: GradingState;
@@ -28,6 +29,18 @@ export function GradingFeedback({ state, rubric, onRetry, retrying }: Props) {
       <Banner tone="neutral" icon={<Clock className="size-4 shrink-0" aria-hidden="true" />}>
         {pendingCopy[state.reason]}
       </Banner>
+    );
+  }
+
+  if (state.status === "save-failed") {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-amber/15 bg-amber-surface text-amber px-4 py-3 text-[14px] font-medium">
+        <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1">Astra marked this, but we couldn't save the feedback yet. Try again to save it.</span>
+        <Button size="sm" variant="secondary" onClick={onRetry} loading={retrying}>
+          <RotateCcw className="size-3.5" aria-hidden="true" /> Try again
+        </Button>
+      </div>
     );
   }
 

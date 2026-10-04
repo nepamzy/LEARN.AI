@@ -13,11 +13,18 @@ import { GradingFeedback, type GradingState } from "./components/GradingFeedback
 import { formatDate, minutesToLabel } from "../../lib/utils";
 import { gradeSubmission } from "../../lib/ai/grading";
 import { isAiConfigured } from "../../lib/ai/proxyClient";
-import { clearPendingGrading, getPendingGrading, queuePendingGrading } from "../../lib/ai/gradingQueue";
-import { AiRateLimitError, AiUnavailableError, type GradingRequest } from "../../lib/ai/types";
+import { clearPendingGrading, getPendingGrading, queuePendingGrading, type PendingGrading } from "../../lib/ai/gradingQueue";
+import { AiRateLimitError, AiUnavailableError, type GradingResult } from "../../lib/ai/types";
+import { saveGradedRecord } from "../../lib/api/gradedSubmissions";
 
 function currentTime(): Date {
   return new Date();
+}
+
+function gradingFailureState(err: unknown): GradingState {
+  if (err instanceof AiUnavailableError) return { status: "pending", reason: "not-configured" };
+  if (err instanceof AiRateLimitError) return { status: "failed", reason: "rate-limited" };
+  return { status: "failed" };
 }
 
 export function AssignmentDetailPage() {
@@ -49,16 +56,36 @@ export function AssignmentDetailPage() {
   const topic = assignment.topicId ? getTopic(assignment.topicId) : undefined;
   const canSubmit = (method === "type" && typedText.trim().length > 0) || (method === "file" && !!file) || (method === "photo" && !!ocrText);
 
-  async function markWork(assignmentId: string, request: GradingRequest) {
+  // Order matters: the grade is kept on-device before the save, and shown only
+  // after the save succeeds, so a student never sees a grade that isn't stored.
+  async function completeGrading(job: PendingGrading) {
     setRetrying(true);
+    let result: GradingResult | undefined = job.result;
     try {
-      const result = await gradeSubmission(request);
-      clearPendingGrading(assignmentId);
-      setGrading({ status: "graded", result });
+      if (!result) {
+        result = await gradeSubmission(job.request);
+        queuePendingGrading({ ...job, result, gradedAt: currentTime().toISOString() });
+      }
     } catch (err) {
-      if (err instanceof AiUnavailableError) setGrading({ status: "pending", reason: "not-configured" });
-      else if (err instanceof AiRateLimitError) setGrading({ status: "failed", reason: "rate-limited" });
-      else setGrading({ status: "failed" });
+      setGrading(gradingFailureState(err));
+      setRetrying(false);
+      return;
+    }
+    if (!result) return;
+
+    try {
+      await saveGradedRecord({
+        id: job.recordId,
+        assignmentId: job.assignmentId,
+        submissionMethod: job.submissionMethod,
+        submittedText: job.request.studentText,
+        gradedAt: getPendingGrading(job.assignmentId)?.gradedAt ?? job.submittedAt,
+        result,
+      });
+      clearPendingGrading(job.assignmentId);
+      setGrading({ status: "graded", result });
+    } catch {
+      setGrading({ status: "save-failed" });
     } finally {
       setRetrying(false);
     }
@@ -72,23 +99,29 @@ export function AssignmentDetailPage() {
       setGrading({ status: "pending", reason: "file" });
       return;
     }
-    const request: GradingRequest = {
-      assignmentTitle: assignment!.title,
-      objective: assignment!.objective,
-      rubric: assignment!.rubric,
-      studentText,
+    const job: PendingGrading = {
+      assignmentId: assignment!.id,
+      request: {
+        assignmentTitle: assignment!.title,
+        objective: assignment!.objective,
+        rubric: assignment!.rubric,
+        studentText,
+      },
+      submittedAt: now.toISOString(),
+      submissionMethod: method === "photo" ? "photo" : "type",
+      recordId: crypto.randomUUID(),
     };
-    queuePendingGrading({ assignmentId: assignment!.id, request, submittedAt: now.toISOString() });
+    queuePendingGrading(job);
     if (!isAiConfigured()) {
       setGrading({ status: "pending", reason: "not-configured" });
       return;
     }
-    void markWork(assignment!.id, request);
+    void completeGrading(job);
   }
 
   function retryGrading() {
     const job = getPendingGrading(assignment!.id);
-    if (job) void markWork(assignment!.id, job.request);
+    if (job) void completeGrading(job);
   }
 
   if (submittedAt) {
