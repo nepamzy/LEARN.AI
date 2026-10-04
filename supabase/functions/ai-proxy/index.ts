@@ -2,10 +2,84 @@
 // student-facing content; prompts, model choice, and the API key stay here.
 // Secret: ANTHROPIC_API_KEY (set with `supabase secrets set`).
 // Optional: ALLOWED_ORIGIN (defaults to "*" — tighten before public launch).
+//
+// Phase 4 adds per-student daily rate limiting (see "Rate limiting" below).
+// This function is still meant to be deployed with --no-verify-jwt, so
+// without this, anyone who obtained the function URL could call it an
+// unlimited number of times against the real Anthropic account. Rate
+// limiting is the control that makes that deployment mode safe to use.
+
+import { utcWindowDate, isWithinLimit, isValidStudentId } from "./rateLimit.ts";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const TUTOR_MODEL = "claude-haiku-4-5-20251001";
 const GRADING_MODEL = "claude-sonnet-5-5";
+
+// ---- Rate limiting ---------------------------------------------------------
+//
+// Limits, per student per calendar day (UTC), as named constants so they're
+// trivial to change later:
+//   - Tutor is cheap (Haiku, short replies) and used conversationally, so its
+//     limit is generous. Note there is ALSO an existing client-side "free
+//     tier" limit (DAILY_FREE_MESSAGE_LIMIT = 8 in tutorEngine.ts) that
+//     drives the upgrade-prompt UI — that's a separate product/UX concern.
+//     This server-side limit is a hard abuse-prevention backstop that holds
+//     even if a request bypasses the client entirely (e.g. a direct call to
+//     the function URL), so it's set well above the client's UX limit.
+//   - Grading is expensive (Sonnet, long output) and a student only submits
+//     a handful of assignments a day in normal use, so its limit is tight.
+const TUTOR_DAILY_LIMIT = 40;
+const GRADING_DAILY_LIMIT = 10;
+
+// Storage: a Postgres table (rate_limit_counters — see
+// supabase/migrations/20261004120000_add_rate_limit_counters.sql), written
+// via this function's service-role key, which bypasses RLS. Chosen over Deno
+// KV because: (1) it's guaranteed to work on Supabase's managed Edge Runtime
+// — Deno KV support there is not something this phase could verify without
+// a real deployment, which is explicitly out of scope for this session to
+// perform; (2) it's inspectable and testable the same way every other table
+// in this project is (direct SQL), with no new storage primitive to reason
+// about; (3) the existing practice_attempts/mastery_records tables already
+// show this schema handles this request volume comfortably.
+//
+// Window: fixed window (one counter row per student+endpoint+UTC day),
+// not a sliding window. A fixed window can let a student send up to 2x the
+// limit across a window boundary (e.g. the last message of one day and the
+// first of the next), which is an acceptable, well-understood trade-off for
+// an abuse backstop at this stage — a sliding window needs either a stored
+// timestamp per request or a decaying-bucket algorithm, which is more
+// storage and more logic than this phase's threat model (cost control, not
+// precise per-second throttling) justifies.
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+type RateLimitEndpoint = "tutor" | "grade";
+
+async function checkAndIncrementRateLimit(
+  studentId: string,
+  endpoint: RateLimitEndpoint,
+  limit: number,
+  now: Date
+): Promise<{ allowed: boolean; count: number }> {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+    // Misconfigured deployment (missing env vars) — fail closed rather than
+    // silently allowing unlimited requests.
+    return { allowed: false, count: 0 };
+  }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/increment_rate_limit`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: SERVICE_ROLE_KEY,
+      authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+    },
+    body: JSON.stringify({ p_student_id: studentId, p_endpoint: endpoint, p_window_date: utcWindowDate(now) }),
+  });
+  if (!res.ok) return { allowed: false, count: 0 };
+  const count = (await res.json()) as number;
+  return { allowed: isWithinLimit(count, limit), count };
+}
 
 const TUTOR_SYSTEM = `You are Astra, a study tutor for Nigerian secondary-school students preparing for JAMB, WAEC, NECO, Post-UTME, BECE and Common Entrance exams.
 
@@ -87,8 +161,14 @@ async function callAnthropic(model: string, system: { text: string; cache: boole
   return { text };
 }
 
-async function handleTutor(body: Record<string, unknown>) {
+async function handleTutor(body: Record<string, unknown>, studentId: string) {
   if (!isString(body.message, MAX_MESSAGE)) return json({ error: "invalid_message" }, 400);
+
+  const limit = await checkAndIncrementRateLimit(studentId, "tutor", TUTOR_DAILY_LIMIT, new Date());
+  if (!limit.allowed) {
+    return json({ error: "daily_limit_reached", endpoint: "tutor", limit: TUTOR_DAILY_LIMIT }, 429);
+  }
+
   const tone = typeof body.tone === "string" && TONE_INSTRUCTIONS[body.tone] ? body.tone : "guided";
 
   const history = Array.isArray(body.history)
@@ -114,11 +194,16 @@ async function handleTutor(body: Record<string, unknown>) {
   return json({ text: result.text.trim() });
 }
 
-async function handleGrade(body: Record<string, unknown>) {
+async function handleGrade(body: Record<string, unknown>, studentId: string) {
   if (!isString(body.assignmentTitle, 200) || !isString(body.objective, 1000)) return json({ error: "invalid_assignment" }, 400);
   if (!isString(body.studentText, MAX_STUDENT_TEXT)) return json({ error: "invalid_submission" }, 400);
   if (!Array.isArray(body.rubric) || body.rubric.length === 0 || body.rubric.length > MAX_CRITERIA) {
     return json({ error: "invalid_rubric" }, 400);
+  }
+
+  const limit = await checkAndIncrementRateLimit(studentId, "grade", GRADING_DAILY_LIMIT, new Date());
+  if (!limit.allowed) {
+    return json({ error: "daily_limit_reached", endpoint: "grade", limit: GRADING_DAILY_LIMIT }, 429);
   }
 
   const rubric = body.rubric as { id: unknown; name: unknown; maxScore: unknown }[];
@@ -158,7 +243,9 @@ Deno.serve(async (req) => {
     return json({ error: "invalid_json" }, 400);
   }
 
-  if (body.kind === "tutor") return handleTutor(body);
-  if (body.kind === "grade") return handleGrade(body);
+  if (!isValidStudentId(body.studentId)) return json({ error: "invalid_student" }, 400);
+
+  if (body.kind === "tutor") return handleTutor(body, body.studentId);
+  if (body.kind === "grade") return handleGrade(body, body.studentId);
   return json({ error: "unknown_kind" }, 400);
 });

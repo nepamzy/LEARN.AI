@@ -14,7 +14,7 @@ import { formatDate, minutesToLabel } from "../../lib/utils";
 import { gradeSubmission } from "../../lib/ai/grading";
 import { isAiConfigured } from "../../lib/ai/proxyClient";
 import { clearPendingGrading, getPendingGrading, queuePendingGrading } from "../../lib/ai/gradingQueue";
-import { AiUnavailableError, type GradingRequest } from "../../lib/ai/types";
+import { AiRateLimitError, AiUnavailableError, type GradingRequest } from "../../lib/ai/types";
 
 function currentTime(): Date {
   return new Date();
@@ -56,7 +56,9 @@ export function AssignmentDetailPage() {
       clearPendingGrading(assignmentId);
       setGrading({ status: "graded", result });
     } catch (err) {
-      setGrading(err instanceof AiUnavailableError ? { status: "pending", reason: "not-configured" } : { status: "failed" });
+      if (err instanceof AiUnavailableError) setGrading({ status: "pending", reason: "not-configured" });
+      else if (err instanceof AiRateLimitError) setGrading({ status: "failed", reason: "rate-limited" });
+      else setGrading({ status: "failed" });
     } finally {
       setRetrying(false);
     }

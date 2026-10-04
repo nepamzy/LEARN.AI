@@ -7,7 +7,7 @@ import { Banner } from "../../../components/ui/Banner";
 export type GradingState =
   | { status: "pending"; reason: "not-configured" | "file" | "waiting" }
   | { status: "graded"; result: GradingResult }
-  | { status: "failed" };
+  | { status: "failed"; reason?: "rate-limited" };
 
 interface Props {
   state: GradingState;
@@ -32,10 +32,15 @@ export function GradingFeedback({ state, rubric, onRetry, retrying }: Props) {
   }
 
   if (state.status === "failed") {
+    const isRateLimited = state.reason === "rate-limited";
     return (
       <div className="flex items-center gap-3 rounded-xl border border-amber/15 bg-amber-surface text-amber px-4 py-3 text-[14px] font-medium">
         <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
-        <span className="flex-1">Astra couldn't mark this just now. Your work is saved on this device.</span>
+        <span className="flex-1">
+          {isRateLimited
+            ? "You've reached today's AI grading limit. Your work is saved — try again tomorrow."
+            : "Astra couldn't mark this just now. Your work is saved on this device."}
+        </span>
         <Button size="sm" variant="secondary" onClick={onRetry} loading={retrying}>
           <RotateCcw className="size-3.5" aria-hidden="true" /> Try again
         </Button>

@@ -3,7 +3,7 @@
 //   APP_URL=http://localhost:5173 node scripts/browser-smoke.mjs            (proxy configured)
 //   APP_URL=http://localhost:5174 EXPECT_NOT_CONFIGURED=1 node scripts/browser-smoke.mjs
 import { chromium } from "playwright";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -105,6 +105,74 @@ if (!NOT_CONFIGURED) {
     record("retry is offered", await expectText(page, "Try again", 2000));
     record("no score is fabricated", !(await expectText(page, "AI practice feedback", 1000)));
     await page.screenshot({ path: join(SHOTS, "grading-failure.png"), fullPage: true });
+    await context.close();
+  }
+
+  console.log("\nTutor daily rate limit (Phase 4)");
+  {
+    const { context, page } = await newPage(browser);
+    await page.goto(`${APP_URL}/tutor`);
+    await page.fill("#tutor-input", "RATELIMIT please");
+    await page.getByRole("button", { name: "Send message" }).click();
+    record("server rate-limit message is shown, distinct from the generic failure", await expectText(page, "You've reached today's tutor message limit"));
+    record("the generic 'couldn't respond' failure banner is NOT shown instead", !(await expectText(page, "Astra couldn't respond just now.", 500)));
+    await page.screenshot({ path: join(SHOTS, "tutor-rate-limited.png"), fullPage: true });
+    await context.close();
+  }
+
+  console.log("\nGrading daily rate limit (Phase 4)");
+  {
+    const { context, page } = await newPage(browser);
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    await page.getByLabel("Your response").fill("RATELIMITGRADE this essay body goes here for testing purposes today.");
+    await page.getByRole("button", { name: "Submit assignment" }).click();
+    record("server rate-limit message is shown for grading", await expectText(page, "You've reached today's AI grading limit"));
+    record("no score is fabricated when rate-limited", !(await expectText(page, "AI practice feedback", 1000)));
+    await page.screenshot({ path: join(SHOTS, "grading-rate-limited.png"), fullPage: true });
+    await context.close();
+  }
+
+  console.log("\nPDF report generation (Phase 4)");
+  {
+    const { context, page, errors } = await newPage(browser);
+    await page.goto(`${APP_URL}/assignments/asg-3/report`);
+    record("report page renders the rubric breakdown before download", await expectText(page, "Rubric breakdown"));
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 15000 }).catch(() => null),
+      page.getByRole("button", { name: /Download PDF report/ }).click(),
+    ]);
+    record("clicking download produces a real file download (not a toast stub)", !!download);
+    if (download) {
+      record("downloaded file is a .pdf", download.suggestedFilename().toLowerCase().endsWith(".pdf"), download.suggestedFilename());
+      const path = await download.path();
+      const size = path ? statSync(path).size : 0;
+      record("PDF file is non-trivial size (a real rendered document, not an empty stub)", size > 1000, `${size} bytes`);
+    }
+    record("success toast confirms the download, not a 'being prepared' stub message", await expectText(page, "has downloaded", 3000));
+    record("no uncaught page errors generating the PDF", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+
+  console.log("\nOCR real-failure state (Phase 4 — see Phase 4 report: this sandbox's network");
+  console.log("policy blocks the OCR CDN, so this is a REAL failure, not a simulated one,");
+  console.log("proving the error UI works under genuine failure. Success/low-confidence");
+  console.log("paths need a normal network and must be verified outside this sandbox.)");
+  {
+    const { context, page, errors } = await newPage(browser);
+    const filePath = join(tmpdir(), "astra-test-photo.png");
+    // A minimal valid 1x1 PNG — content doesn't matter, this exercises the
+    // OCR engine's real failure path (no CDN access), not recognition itself.
+    writeFileSync(
+      filePath,
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
+    );
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    await page.getByRole("tab", { name: "Photo" }).click();
+    await page.setInputFiles('input[type="file"][accept="image/*"]', filePath);
+    const ocrSettled = await expectText(page, "Try again", 25000);
+    record("a real OCR failure (blocked CDN) surfaces a clear error with retry, not a blank/stuck screen", ocrSettled);
+    record("no uncaught page errors on OCR failure", errors.length === 0, errors.join(" | "));
+    await page.screenshot({ path: join(SHOTS, "ocr-error-state.png"), fullPage: true });
     await context.close();
   }
 

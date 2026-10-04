@@ -6,6 +6,7 @@ import { ChatBubble } from "./components/ChatBubble";
 import { TypingIndicator } from "./components/TypingIndicator";
 import { ToneSelector } from "./components/ToneSelector";
 import { generateTutorReply, promptSuggestions, DAILY_FREE_MESSAGE_LIMIT, type TutorTone } from "./tutorEngine";
+import { AiRateLimitError } from "../../lib/ai/types";
 import { Banner } from "../../components/ui/Banner";
 import { Button } from "../../components/ui/Button";
 import { useAppState } from "../../state/useAppState";
@@ -19,6 +20,10 @@ export function TutorPage() {
   const [tone, setTone] = useState<TutorTone>("guided");
   const [typing, setTyping] = useState(false);
   const [failed, setFailed] = useState(false);
+  // Distinct from `failed`: the server-side Phase 4 rate limit was hit, as
+  // opposed to a generic/transient failure. Separate from `rateLimited`
+  // below, which is the existing client-side free-tier UX limit.
+  const [serverLimitReached, setServerLimitReached] = useState(false);
   const [messagesSentToday, setMessagesSentToday] = useState(3);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -40,6 +45,7 @@ export function TutorPage() {
     setMessages((m) => [...m, studentMsg]);
     setInput("");
     setFailed(false);
+    setServerLimitReached(false);
     setTyping(true);
     setMessagesSentToday((n) => n + 1);
     scrollToBottom();
@@ -56,7 +62,10 @@ export function TutorPage() {
         setMessages((m) => [...m, reply]);
         scrollToBottom();
       })
-      .catch(() => setFailed(true))
+      .catch((err) => {
+        if (err instanceof AiRateLimitError) setServerLimitReached(true);
+        else setFailed(true);
+      })
       .finally(() => setTyping(false));
   }
 
@@ -102,6 +111,12 @@ export function TutorPage() {
             >
               <RotateCcw className="size-3.5" aria-hidden="true" /> Retry
             </button>
+          </div>
+        )}
+        {serverLimitReached && (
+          <div className="flex items-center gap-2 text-sm text-amber bg-amber-surface rounded-xl px-4 py-3">
+            <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+            <span className="flex-1">You've reached today's tutor message limit — try again tomorrow.</span>
           </div>
         )}
 

@@ -1,6 +1,10 @@
 // Local stand-in for the Supabase ai-proxy Edge Function, for browser testing without
 // spending API credit. Same request/response shapes. Test triggers in the message text:
-//   "SLOW" -> 6s delay, "FAIL" -> 502 for tutor, "FAILGRADE" -> 502 for grading.
+//   "SLOW" -> 6s delay, "FAIL" -> 502 for tutor, "FAILGRADE" -> 502 for grading,
+//   "RATELIMIT" -> 429 daily_limit_reached for tutor, "RATELIMITGRADE" -> same for grading.
+// The 429 body/status mirrors exactly what the real ai-proxy function returns
+// once its Phase 4 rate limit is hit (see supabase/functions/ai-proxy/index.ts),
+// so this exercises the real client-side AiRateLimitError path end-to-end.
 import { createServer } from "node:http";
 
 const PORT = 8787;
@@ -23,6 +27,7 @@ createServer((req, res) => {
     const body = JSON.parse(raw || "{}");
 
     if (body.kind === "tutor") {
+      if (String(body.message).includes("RATELIMIT")) return send(res, 429, { error: "daily_limit_reached", endpoint: "tutor", limit: 40 });
       if (String(body.message).includes("SLOW")) await new Promise((r) => setTimeout(r, 6000));
       if (String(body.message).includes("FAIL")) return send(res, 502, { error: "upstream" });
       return send(res, 200, {
@@ -31,6 +36,7 @@ createServer((req, res) => {
     }
 
     if (body.kind === "grade") {
+      if (String(body.studentText).includes("RATELIMITGRADE")) return send(res, 429, { error: "daily_limit_reached", endpoint: "grade", limit: 10 });
       if (String(body.studentText).includes("FAILGRADE")) return send(res, 502, { error: "upstream" });
       const criteria = (body.rubric as { id: string; maxScore: number }[]).map((r, i) => ({
         criterionId: r.id,

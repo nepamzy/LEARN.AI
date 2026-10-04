@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { Download, RotateCcw, Sparkles, UserRound, FileQuestion, Clock3 } from "lucide-react";
 import { assignments, getSubject } from "../../lib/mockData";
@@ -7,11 +8,13 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { StatusTag } from "../../components/ui/StatusTag";
 import { useToast } from "../../components/ui/useToast";
 import { formatDate } from "../../lib/utils";
+import { downloadAssignmentReportPdf } from "../../lib/pdf/assignmentReport";
 
 export function AssignmentReportPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { show } = useToast();
+  const [generatingPdf, setGeneratingPdf] = useState(false);
   const assignment = assignments.find((a) => a.id === id);
 
   if (!assignment) {
@@ -42,6 +45,21 @@ export function AssignmentReportPage() {
   const subject = getSubject(assignment.subjectId);
   const finalScore = assignment.teacherOverride?.adjustedScore ?? assignment.totalScore ?? 0;
   const pct = Math.round((finalScore / assignment.maxScore) * 100);
+
+  async function handleDownloadPdf() {
+    setGeneratingPdf(true);
+    try {
+      // Yield a frame so the loading state actually paints before the
+      // (synchronous, CPU-bound) PDF render blocks the main thread.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      downloadAssignmentReportPdf(assignment!, subject?.name);
+      show("Your PDF report has downloaded.", "success");
+    } catch {
+      show("Couldn't generate the PDF just now. Please try again.", "error");
+    } finally {
+      setGeneratingPdf(false);
+    }
+  }
 
   return (
     <div className="pb-6 space-y-4 pt-2 max-w-2xl">
@@ -136,8 +154,9 @@ export function AssignmentReportPage() {
         <Button fullWidth variant="secondary" onClick={() => navigate(`/assignments/${assignment.id}`)}>
           <RotateCcw className="size-4" aria-hidden="true" /> Redraft &amp; resubmit
         </Button>
-        <Button fullWidth variant="secondary" onClick={() => show("Your PDF report is being prepared and will download shortly.", "success")}>
-          <Download className="size-4" aria-hidden="true" /> Download PDF report
+        <Button fullWidth variant="secondary" onClick={() => void handleDownloadPdf()} loading={generatingPdf}>
+          {!generatingPdf && <Download className="size-4" aria-hidden="true" />}
+          {generatingPdf ? "Preparing PDF…" : "Download PDF report"}
         </Button>
       </div>
     </div>

@@ -10,16 +10,7 @@ if (!url || !key) {
 
 export const supabase = createClient(url ?? "", key ?? "");
 
-// Single seeded demo student for this phase (see supabase/migrations) —
-// real multi-user auth is out of scope until Phase 3.
-export const DEMO_STUDENT_ID = "00000000-0000-4000-8000-000000000001";
-
-// Subjects whose mastery/revision data is now backed by the real engine.
-// Everything else (biology, chemistry, assignments, tutor) still reads
-// src/lib/mockData.ts untouched.
-export const LIVE_SUBJECT_IDS = ["math", "english"] as const;
-export type LiveSubjectId = (typeof LIVE_SUBJECT_IDS)[number];
-
-export function isLiveSubject(subjectId: string): subjectId is LiveSubjectId {
-  return (LIVE_SUBJECT_IDS as readonly string[]).includes(subjectId);
-}
+// Re-exported from studentId.ts (not defined here) so modules that need only
+// the id/subject constants — not the Supabase client — can import them
+// without pulling in import.meta.env. See studentId.ts for why.
+export { DEMO_STUDENT_ID, LIVE_SUBJECT_IDS, isLiveSubject, type LiveSubjectId } from "./studentId";
