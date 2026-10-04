@@ -85,6 +85,49 @@ async function expectText(page, text, timeout = 10000) {
   }
 }
 
+// Writes a pending grading job straight into the app's localStorage, as an
+// interrupted submission would leave it, so recovery can be tested after a reload.
+async function seedPendingJob(page, job) {
+  await page.goto(`${APP_URL}/tutor`);
+  await page.evaluate((j) => localStorage.setItem("astra:pendingGrading", JSON.stringify([j])), job);
+}
+
+const ASG1_RUBRIC = [
+  { id: "r1", name: "Content & relevance", maxScore: 10 },
+  { id: "r2", name: "Organisation", maxScore: 10 },
+  { id: "r3", name: "Grammar & mechanics", maxScore: 10 },
+  { id: "r4", name: "Vocabulary & register", maxScore: 10 },
+];
+
+function baseJob(overrides) {
+  return {
+    assignmentId: "asg-1",
+    request: {
+      assignmentTitle: "Essay: qualitative education",
+      objective: "Practice argumentative essay structure.",
+      rubric: ASG1_RUBRIC,
+      studentText: "A typed answer that was submitted but has not been graded yet.",
+    },
+    submittedAt: "2026-10-04T12:00:00.000Z",
+    submissionMethod: "type",
+    recordId: "33333333-3333-4333-8333-333333333333",
+    ...overrides,
+  };
+}
+
+const unfinishedJob = () => baseJob({});
+const gradedButUnsavedJob = () =>
+  baseJob({
+    gradedAt: "2026-10-04T12:01:00.000Z",
+    result: {
+      criteria: [{ criterionId: "r1", score: 9, feedback: "Seeded recovered feedback.", quotes: [] }],
+      totalScore: 9,
+      maxScore: 40,
+      strengths: [],
+      improvements: [],
+    },
+  });
+
 const browser = await chromium.launch();
 
 if (!NOT_CONFIGURED) {
@@ -262,6 +305,64 @@ if (!NOT_CONFIGURED) {
     await context.close();
   }
 
+  console.log("\nRecovery after reload: unfinished submission (Phase 6)");
+  {
+    const { context, page, store, proxy } = await newPage(browser);
+    await seedPendingJob(page, unfinishedJob());
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    record("an unfinished submission is recovered after a reload", await expectText(page, "unfinished submission"));
+    record("the recovered submission still shows when it was submitted", await expectText(page, "was submitted on"));
+    record("recovery does not grade automatically (no AI call before the student taps)", proxy.calls === 0, `${proxy.calls} proxy call(s)`);
+    await page.getByRole("button", { name: "Resume marking" }).click();
+    record("resuming grades the submission and shows the feedback once saved", await expectText(page, "AI practice feedback"));
+    record("resuming spends exactly one AI call", proxy.calls === 1, `${proxy.calls} proxy call(s)`);
+    record("the resumed grade is written to graded_submissions", store.rows.length === 1, `${store.rows.length} row(s)`);
+    await context.close();
+  }
+
+  console.log("\nRecovery after reload: grade not yet saved (Phase 6)");
+  {
+    const { context, page, store, proxy } = await newPage(browser);
+    await seedPendingJob(page, gradedButUnsavedJob());
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    record("a grade that was never saved is saved automatically on return", await expectText(page, "AI practice feedback"));
+    record("the feedback shown is the one that was graded before the reload", await expectText(page, "Seeded recovered feedback."));
+    record("the automatic save spends no AI call", proxy.calls === 0, `${proxy.calls} proxy call(s)`);
+    record("the recovered grade is written exactly once", store.rows.length === 1, `${store.rows.length} row(s)`);
+    await context.close();
+  }
+
+  console.log("\nRecovery after reload: save-before-show holds on recovery (Phase 6)");
+  {
+    const { context, page, store, proxy } = await newPage(browser);
+    store.failWrites = true;
+    await seedPendingJob(page, gradedButUnsavedJob());
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    record("a recovered grade that fails to save is not shown", !(await expectText(page, "AI practice feedback", 1500)));
+    record("the failed recovery save offers a retry", await expectText(page, "couldn't save the feedback yet"));
+    store.failWrites = false;
+    await page.getByRole("button", { name: "Try again" }).click();
+    record("retrying the recovered save shows the grade", await expectText(page, "AI practice feedback"));
+    record("retrying the recovered save spends no AI call", proxy.calls === 0, `${proxy.calls} proxy call(s)`);
+    record("retrying writes exactly one row", store.rows.length === 1, `${store.rows.length} row(s)`);
+    await context.close();
+  }
+
+  console.log("\nRecovery after reload: file submission (Phase 6)");
+  {
+    const { context, page } = await newPage(browser);
+    const filePath = join(tmpdir(), "astra-test-reload.txt");
+    writeFileSync(filePath, "reload test upload");
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    await page.getByRole("tab", { name: "Upload file" }).click();
+    await page.setInputFiles('input[aria-label="Upload assignment file"]', filePath);
+    await page.getByRole("button", { name: "Submit assignment" }).click();
+    await page.reload();
+    record("a file submission still shows as submitted after a reload", await expectText(page, "was submitted on"));
+    record("it still says file uploads can't be marked yet, rather than vanishing", await expectText(page, "can't read uploaded files yet"));
+    await context.close();
+  }
+
   console.log("\nTutor daily rate limit (Phase 4)");
   {
     const { context, page } = await newPage(browser);
@@ -323,10 +424,44 @@ if (!NOT_CONFIGURED) {
     await page.goto(`${APP_URL}/assignments/asg-1`);
     await page.getByRole("tab", { name: "Photo" }).click();
     await page.setInputFiles('input[type="file"][accept="image/*"]', filePath);
-    const ocrSettled = await expectText(page, "Try again", 25000);
-    record("a real OCR failure (blocked CDN) surfaces a clear error with retry, not a blank/stuck screen", ocrSettled);
+    const ocrSettled = await expectText(page, "Try again", 45000);
+    record("OCR settles to an error with retry instead of hanging on 'Reading' (Phase 6 time bound)", ocrSettled);
+    const timeoutCopy = await expectText(page, "taking too long", 1000);
+    const readCopy = await expectText(page, "Couldn't read this photo", 1000);
+    const noTextCopy = await expectText(page, "couldn't find any readable text", 1000);
+    record(
+      "the settled error is a clear OCR message (timeout, read failure, or no readable text)",
+      timeoutCopy || readCopy || noTextCopy
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    record("Try again starts a fresh read", await expectText(page, "Reading your handwriting", 3000));
+    record("the retried read also settles to an error with retry", await expectText(page, "Try again", 45000));
     record("no uncaught page errors on OCR failure", errors.length === 0, errors.join(" | "));
     await page.screenshot({ path: join(SHOTS, "ocr-error-state.png"), fullPage: true });
+    await context.close();
+  }
+
+  console.log("\nOCR time bound, forced hang (Phase 6)");
+  {
+    const { context, page, errors } = await newPage(browser);
+    // Hold every OCR CDN request open, so recognition can only end by timing out.
+    await context.route("https://cdn.jsdelivr.net/**", () => {});
+    const filePath = join(tmpdir(), "astra-test-hang.png");
+    writeFileSync(
+      filePath,
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
+    );
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    await page.getByRole("tab", { name: "Photo" }).click();
+    await page.setInputFiles('input[type="file"][accept="image/*"]', filePath);
+    record("a read that never completes shows the reading state", await expectText(page, "Reading your handwriting", 5000));
+    record("the time bound fires and shows the timeout message", await expectText(page, "taking too long", 45000));
+    record("the timeout state offers Try again", await expectText(page, "Try again", 2000));
+    await page.screenshot({ path: join(SHOTS, "ocr-timeout.png"), fullPage: true });
+    await page.getByRole("button", { name: "Try again" }).click();
+    record("Try again after a timeout starts a fresh read", await expectText(page, "Reading your handwriting", 3000));
+    record("the retried read after a timeout also times out cleanly", await expectText(page, "taking too long", 45000));
+    record("no uncaught page errors around the timeout", errors.length === 0, errors.join(" | "));
     await context.close();
   }
 
@@ -361,6 +496,9 @@ if (!NOT_CONFIGURED) {
     record("unconfigured grading shows a pending state, not a score", await expectText(page, "isn't switched on for this build yet"));
     record("no score is fabricated when unconfigured", !(await expectText(page, "AI practice feedback", 1000)));
     await page.screenshot({ path: join(SHOTS, "grading-unconfigured.png"), fullPage: true });
+    await page.reload();
+    record("an unconfigured submission is still there after a reload, with a resume option", await expectText(page, "unfinished submission"));
+    record("the reloaded submission offers manual resume instead of re-grading on its own", await expectText(page, "Resume marking", 2000));
     record("no uncaught page errors", errors.length === 0, errors.join(" | "));
     await context.close();
   }

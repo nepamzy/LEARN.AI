@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, RotateCcw, Sparkles } from "lucide-react";
+import { AlertTriangle, Clock, Loader2, RotateCcw, Sparkles } from "lucide-react";
 import type { GradingResult, RubricCriterion } from "../../../lib/ai/types";
 import { Card } from "../../../components/ui/Card";
 import { Button } from "../../../components/ui/Button";
@@ -8,7 +8,9 @@ export type GradingState =
   | { status: "pending"; reason: "not-configured" | "file" | "waiting" }
   | { status: "graded"; result: GradingResult }
   | { status: "failed"; reason?: "rate-limited" }
-  | { status: "save-failed" };
+  | { status: "save-failed" }
+  | { status: "resuming" }
+  | { status: "unfinished" };
 
 interface Props {
   state: GradingState;
@@ -29,6 +31,26 @@ export function GradingFeedback({ state, rubric, onRetry, retrying }: Props) {
       <Banner tone="neutral" icon={<Clock className="size-4 shrink-0" aria-hidden="true" />}>
         {pendingCopy[state.reason]}
       </Banner>
+    );
+  }
+
+  if (state.status === "resuming") {
+    return (
+      <Banner tone="neutral" icon={<Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />}>
+        Finishing your submission. Saving your feedback…
+      </Banner>
+    );
+  }
+
+  if (state.status === "unfinished") {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-info/15 bg-info-surface text-info px-4 py-3 text-[14px] font-medium">
+        <Clock className="size-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1">You have an unfinished submission for this assignment. Astra hasn't marked it yet.</span>
+        <Button size="sm" variant="secondary" onClick={onRetry} loading={retrying}>
+          Resume marking
+        </Button>
+      </div>
     );
   }
 

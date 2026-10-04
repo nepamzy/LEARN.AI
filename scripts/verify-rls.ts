@@ -55,6 +55,36 @@ async function main() {
   const { data: otherStudent, error: e3 } = await supabase.from("students").select("id").eq("id", OTHER_STUDENT_ID);
   check("students: zero rows for a non-matching id", !e3 && (otherStudent?.length ?? 0) === 0, e3?.message);
 
+  const { data: otherGraded, error: e6 } = await supabase
+    .from("graded_submissions")
+    .select("id")
+    .eq("student_id", OTHER_STUDENT_ID);
+  check("graded_submissions: zero rows for a non-matching student_id", !e6 && (otherGraded?.length ?? 0) === 0, e6?.message);
+
+  // If this insert succeeds the policy is broken and a probe row now exists.
+  // The probe is tagged so it can be found and removed with the service role.
+  const probeId = crypto.randomUUID();
+  const { error: e7 } = await supabase.from("graded_submissions").insert({
+    id: probeId,
+    student_id: OTHER_STUDENT_ID,
+    assignment_id: "rls-probe",
+    submission_method: "type",
+    submitted_text: "rls probe",
+    total_score: 0,
+    max_score: 1,
+    criteria: [],
+    strengths: [],
+    improvements: [],
+  });
+  // 42501 is Postgres' insufficient_privilege, which is what an RLS insert
+  // denial returns. Any other error (e.g. no network) must not count as a pass.
+  const rlsRejected = e7?.code === "42501";
+  check(
+    "graded_submissions: an insert for a non-matching student_id is rejected by RLS",
+    rlsRejected,
+    rlsRejected ? undefined : e7 ? `not an RLS denial: ${e7.message}` : `insert succeeded, so the policy is not scoping by student_id; remove probe row ${probeId} with the service role`
+  );
+
   console.log("\nRLS: the seeded demo student can still read their own data");
   console.log("--------------------------------------------------------------");
 
@@ -64,6 +94,9 @@ async function main() {
     .eq("student_id", DEMO_STUDENT_ID);
   check("mastery_records: the demo student's own rows are still readable", !e4, e4?.message);
   console.log(`    (${ownMastery?.length ?? 0} row(s) found for the demo student)`);
+
+  const { error: e8 } = await supabase.from("graded_submissions").select("id").eq("student_id", DEMO_STUDENT_ID);
+  check("graded_submissions: the demo student's own rows are still readable", !e8, e8?.message);
 
   console.log("\nRLS: curriculum reference data is still publicly readable");
   console.log("--------------------------------------------------------------");

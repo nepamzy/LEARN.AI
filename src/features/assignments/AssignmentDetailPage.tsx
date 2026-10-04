@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { CheckCircle2, FileQuestion, Sparkles, UserRound, ArrowLeft } from "lucide-react";
 import { assignments, getSubject, getTopic } from "../../lib/mockData";
@@ -13,7 +13,7 @@ import { GradingFeedback, type GradingState } from "./components/GradingFeedback
 import { formatDate, minutesToLabel } from "../../lib/utils";
 import { gradeSubmission } from "../../lib/ai/grading";
 import { isAiConfigured } from "../../lib/ai/proxyClient";
-import { clearPendingGrading, getPendingGrading, queuePendingGrading, type PendingGrading } from "../../lib/ai/gradingQueue";
+import { clearPendingGrading, getPendingGrading, queuePendingGrading, resumeAction, type PendingGrading } from "../../lib/ai/gradingQueue";
 import { AiRateLimitError, AiUnavailableError, type GradingResult } from "../../lib/ai/types";
 import { saveGradedRecord } from "../../lib/api/gradedSubmissions";
 
@@ -27,17 +27,72 @@ function gradingFailureState(err: unknown): GradingState {
   return { status: "failed" };
 }
 
+function initialGradingState(job: PendingGrading | undefined): GradingState | null {
+  if (!job) return null;
+  const action = resumeAction(job);
+  if (action === "file-not-graded") return { status: "pending", reason: "file" };
+  if (action === "save-only") return { status: "resuming" };
+  return { status: "unfinished" };
+}
+
 export function AssignmentDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const assignment = assignments.find((a) => a.id === id);
+  const assignmentId = assignment?.id;
+  // Read once at mount: a submission left in progress by a reload.
+  const [recovery] = useState(() => (assignmentId ? getPendingGrading(assignmentId) : undefined));
   const [method, setMethod] = useState("type");
   const [typedText, setTypedText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [ocrText, setOcrText] = useState<string | null>(null);
-  const [submittedAt, setSubmittedAt] = useState<Date | null>(null);
-  const [grading, setGrading] = useState<GradingState | null>(null);
+  const [submittedAt, setSubmittedAt] = useState<Date | null>(() => (recovery ? new Date(recovery.submittedAt) : null));
+  const [grading, setGrading] = useState<GradingState | null>(() => initialGradingState(recovery));
   const [retrying, setRetrying] = useState(false);
+
+  // Order matters: the grade is kept on-device before the save, and shown only
+  // after the save succeeds, so a student never sees a grade that isn't stored.
+  async function saveGrade(job: PendingGrading, result: GradingResult) {
+    try {
+      await saveGradedRecord({
+        id: job.recordId,
+        assignmentId: job.assignmentId,
+        submissionMethod: job.submissionMethod === "file" ? "type" : job.submissionMethod,
+        submittedText: job.request.studentText,
+        gradedAt: getPendingGrading(job.assignmentId)?.gradedAt ?? job.submittedAt,
+        result,
+      });
+      clearPendingGrading(job.assignmentId);
+      setGrading({ status: "graded", result });
+    } catch {
+      setGrading({ status: "save-failed" });
+    }
+  }
+
+  async function completeGrading(job: PendingGrading) {
+    if (job.submissionMethod === "file") return;
+    setRetrying(true);
+    let result: GradingResult | undefined = job.result;
+    try {
+      if (!result) {
+        result = await gradeSubmission(job.request);
+        queuePendingGrading({ ...job, result, gradedAt: currentTime().toISOString() });
+      }
+    } catch (err) {
+      setGrading(gradingFailureState(err));
+      setRetrying(false);
+      return;
+    }
+    await saveGrade(job, result);
+    setRetrying(false);
+  }
+
+  // Resume a grade that already exists. Only the save is retried, so no AI call
+  // is spent and the grade still isn't shown until it has been saved.
+  useEffect(() => {
+    if (recovery?.result) void saveGrade(recovery, recovery.result);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!assignment) {
     return (
@@ -56,49 +111,10 @@ export function AssignmentDetailPage() {
   const topic = assignment.topicId ? getTopic(assignment.topicId) : undefined;
   const canSubmit = (method === "type" && typedText.trim().length > 0) || (method === "file" && !!file) || (method === "photo" && !!ocrText);
 
-  // Order matters: the grade is kept on-device before the save, and shown only
-  // after the save succeeds, so a student never sees a grade that isn't stored.
-  async function completeGrading(job: PendingGrading) {
-    setRetrying(true);
-    let result: GradingResult | undefined = job.result;
-    try {
-      if (!result) {
-        result = await gradeSubmission(job.request);
-        queuePendingGrading({ ...job, result, gradedAt: currentTime().toISOString() });
-      }
-    } catch (err) {
-      setGrading(gradingFailureState(err));
-      setRetrying(false);
-      return;
-    }
-    if (!result) return;
-
-    try {
-      await saveGradedRecord({
-        id: job.recordId,
-        assignmentId: job.assignmentId,
-        submissionMethod: job.submissionMethod,
-        submittedText: job.request.studentText,
-        gradedAt: getPendingGrading(job.assignmentId)?.gradedAt ?? job.submittedAt,
-        result,
-      });
-      clearPendingGrading(job.assignmentId);
-      setGrading({ status: "graded", result });
-    } catch {
-      setGrading({ status: "save-failed" });
-    } finally {
-      setRetrying(false);
-    }
-  }
-
   function handleSubmit() {
     const now = currentTime();
     setSubmittedAt(now);
     const studentText = method === "type" ? typedText.trim() : method === "photo" ? (ocrText ?? "") : "";
-    if (!studentText) {
-      setGrading({ status: "pending", reason: "file" });
-      return;
-    }
     const job: PendingGrading = {
       assignmentId: assignment!.id,
       request: {
@@ -108,10 +124,14 @@ export function AssignmentDetailPage() {
         studentText,
       },
       submittedAt: now.toISOString(),
-      submissionMethod: method === "photo" ? "photo" : "type",
+      submissionMethod: method === "photo" ? "photo" : method === "type" ? "type" : "file",
       recordId: crypto.randomUUID(),
     };
     queuePendingGrading(job);
+    if (!studentText) {
+      setGrading({ status: "pending", reason: "file" });
+      return;
+    }
     if (!isAiConfigured()) {
       setGrading({ status: "pending", reason: "not-configured" });
       return;

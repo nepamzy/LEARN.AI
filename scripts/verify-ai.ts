@@ -12,6 +12,8 @@ import { buildReportSections } from "../src/lib/pdf/assignmentReport";
 import type { Assignment } from "../src/lib/types";
 import { recordToRow, rowToRecord, recordToReportAssignment, type GradedRecord } from "../src/lib/ai/gradedRecord";
 import { assignments } from "../src/lib/mockData";
+import { withOcrTimeout, OcrTimeoutError, OcrError, OCR_TIMEOUT_MS } from "../src/lib/ocr/ocrErrors";
+import { resumeAction, type PendingGrading } from "../src/lib/ai/gradingQueue";
 
 let passed = 0;
 let failed = 0;
@@ -184,6 +186,48 @@ check("live PDF omits the next-steps section it has no data for", !livePdf.some(
 const mockPdf = buildReportSections(mockBase, "English Language");
 const mockPdfText = mockPdf.map((s) => `${s.heading}\n${s.lines.join("\n")}`).join("\n");
 check("fallback PDF for unmarked demo content still says Total mark", mockPdfText.includes("Total mark:") && !mockPdfText.includes("AI practice mark"));
+
+console.log("\nOCR time bound (Phase 6)");
+console.log("------------------------");
+check("the OCR bound is between 20 and 60 seconds", OCR_TIMEOUT_MS >= 20_000 && OCR_TIMEOUT_MS <= 60_000);
+
+let timedOut: unknown = null;
+try {
+  await withOcrTimeout(new Promise<never>(() => {}), 30);
+} catch (err) {
+  timedOut = err;
+}
+check("a task that never settles rejects once the bound passes", timedOut instanceof OcrTimeoutError);
+check("the timeout error is an OcrError, so the existing error branch still handles it", timedOut instanceof OcrError);
+check("the timeout message tells the student to check their connection and try again", (timedOut as Error).message.includes("Check your connection and try again"));
+
+check("a task that settles within the bound resolves with its value", (await withOcrTimeout(Promise.resolve(42), 50)) === 42);
+check(
+  "a task slower than the bound is timed out even though it eventually succeeds",
+  await withOcrTimeout(new Promise((r) => setTimeout(() => r("late"), 100)), 20).then(() => false, (e) => e instanceof OcrTimeoutError)
+);
+let ownError: unknown = null;
+try {
+  await withOcrTimeout(Promise.reject(new OcrError("own failure")), 50);
+} catch (err) {
+  ownError = err;
+}
+check("a task's own failure passes through unchanged, not reported as a timeout", (ownError as Error).message === "own failure" && !(ownError instanceof OcrTimeoutError));
+
+console.log("\nResume decision for interrupted submissions (Phase 6)");
+console.log("------------------------------------------------------");
+const jobBase: Omit<PendingGrading, "submissionMethod" | "result"> = {
+  assignmentId: "asg-1",
+  request: { assignmentTitle: "t", objective: "o", rubric: [{ id: "r1", name: "n", maxScore: 10 }], studentText: "text" },
+  submittedAt: "2026-10-04T12:00:00.000Z",
+  recordId: "22222222-2222-4222-8222-222222222222",
+};
+check("a file job is never auto-resumed, it stays visibly not graded", resumeAction({ ...jobBase, submissionMethod: "file" }) === "file-not-graded");
+check(
+  "a job that already has a grade only needs its save retried (no AI call)",
+  resumeAction({ ...jobBase, submissionMethod: "type", result: { criteria: [], totalScore: 0, maxScore: 10, strengths: [], improvements: [] } }) === "save-only"
+);
+check("a job with no grade waits for the student, so no paid grading call runs unasked", resumeAction({ ...jobBase, submissionMethod: "photo" }) === "await-user");
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
