@@ -11,9 +11,17 @@ import { isLowConfidence, LOW_CONFIDENCE_THRESHOLD } from "../src/lib/ocr/ocrEng
 import { buildReportSections } from "../src/lib/pdf/assignmentReport";
 import type { Assignment } from "../src/lib/types";
 import { recordToRow, rowToRecord, recordToReportAssignment, type GradedRecord } from "../src/lib/ai/gradedRecord";
-import { assignments } from "../src/lib/mockData";
+import { assignments, amara } from "../src/lib/mockData";
 import { withOcrTimeout, OcrTimeoutError, OcrError, OCR_TIMEOUT_MS } from "../src/lib/ocr/ocrErrors";
 import { resumeAction, type PendingGrading } from "../src/lib/ai/gradingQueue";
+import {
+  EDUCATION_LEVEL_EXAMS,
+  allowedExamsForLevel,
+  hasExamContentForLevel,
+  effectiveEducationLevel,
+} from "../src/lib/educationLevel";
+import type { EducationLevel } from "../src/lib/types";
+import { isTutorLevel, tutorIntroForLevel } from "../supabase/functions/ai-proxy/levelFraming";
 
 let passed = 0;
 let failed = 0;
@@ -228,6 +236,58 @@ check(
   resumeAction({ ...jobBase, submissionMethod: "type", result: { criteria: [], totalScore: 0, maxScore: 10, strengths: [], improvements: [] } }) === "save-only"
 );
 check("a job with no grade waits for the student, so no paid grading call runs unasked", resumeAction({ ...jobBase, submissionMethod: "photo" }) === "await-user");
+
+console.log("\nEducation level → exam mapping (Phase 7)");
+console.log("-------------------------------------------");
+check("primary maps to exactly Common Entrance", JSON.stringify(allowedExamsForLevel("primary")) === JSON.stringify(["Common Entrance"]));
+check("junior-secondary maps to exactly BECE", JSON.stringify(allowedExamsForLevel("junior-secondary")) === JSON.stringify(["BECE"]));
+check(
+  "senior-secondary maps to exactly WAEC, NECO, JAMB, Post-UTME",
+  JSON.stringify(allowedExamsForLevel("senior-secondary")) === JSON.stringify(["WAEC", "NECO", "JAMB", "Post-UTME"])
+);
+check("university maps to no exams at all", allowedExamsForLevel("university").length === 0);
+check("every level is covered by the mapping, none left implicit", Object.keys(EDUCATION_LEVEL_EXAMS).sort().join(",") === "junior-secondary,primary,senior-secondary,university");
+
+check("primary has real exam content", hasExamContentForLevel("primary") === true);
+check("junior-secondary has real exam content", hasExamContentForLevel("junior-secondary") === true);
+check("senior-secondary has real exam content", hasExamContentForLevel("senior-secondary") === true);
+check("university has no real exam content yet — the honest case", hasExamContentForLevel("university") === false);
+
+check("an onboarding choice overrides the demo student's level", effectiveEducationLevel("primary", "senior-secondary") === "primary");
+check("no onboarding choice (null) falls back to the demo student's level", effectiveEducationLevel(null, "senior-secondary") === "senior-secondary");
+
+console.log("\nTutor framing by level, cross-contamination check (Phase 7)");
+console.log("---------------------------------------------------------------");
+const introByLevel: Record<EducationLevel | "invalid", string> = {
+  primary: tutorIntroForLevel("primary"),
+  "junior-secondary": tutorIntroForLevel("junior-secondary"),
+  "senior-secondary": tutorIntroForLevel("senior-secondary"),
+  university: tutorIntroForLevel("university"), // not a TutorLevel — exercises the fallback path, same as "invalid"
+  invalid: tutorIntroForLevel(undefined),
+};
+check("primary framing names Common Entrance, never a senior exam", introByLevel.primary.includes("Common Entrance") && !/JAMB|WAEC|NECO|Post-UTME|BECE/.test(introByLevel.primary));
+check("junior-secondary framing names BECE, never a senior or primary exam", introByLevel["junior-secondary"].includes("BECE") && !/JAMB|WAEC|NECO|Post-UTME|Common Entrance/.test(introByLevel["junior-secondary"]));
+check(
+  "senior-secondary framing names the four senior exams, never BECE or Common Entrance",
+  ["JAMB", "WAEC", "NECO", "Post-UTME"].every((e) => introByLevel["senior-secondary"].includes(e)) &&
+    !/BECE|Common Entrance/.test(introByLevel["senior-secondary"])
+);
+check("an unrecognized level (e.g. a stray 'university') falls back to the senior-secondary framing, not a blank or wrong one", introByLevel.university === introByLevel["senior-secondary"]);
+check("a missing level also falls back to senior-secondary, so an older client behaves exactly as before this phase", introByLevel.invalid === introByLevel["senior-secondary"]);
+check("isTutorLevel rejects 'university' — the tutor is never called for it client-side", isTutorLevel("university") === false);
+check("isTutorLevel accepts the three real tutor levels", ["primary", "junior-secondary", "senior-secondary"].every((l) => isTutorLevel(l)));
+
+console.log("\nDemo student under the new model (Phase 7)");
+console.log("-----------------------------------------------");
+check("Amara maps to senior-secondary", amara.educationLevel === "senior-secondary");
+check("Amara's existing exam (JAMB) is valid for her mapped level", allowedExamsForLevel(amara.educationLevel).includes(amara.exam));
+
+console.log("\nAssignment content gating (Phase 7)");
+console.log("----------------------------------------");
+check(
+  "the existing JAMB/WAEC-naming assignment is real content, confirming why non-senior levels must not see it unfiltered",
+  assignments.some((a) => /JAMB|WAEC/.test(a.objective))
+);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

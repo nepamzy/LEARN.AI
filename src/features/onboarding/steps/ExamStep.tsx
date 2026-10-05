@@ -1,24 +1,36 @@
+import { useEffect } from "react";
 import type { ExamType } from "../../../lib/types";
 import { Button } from "../../../components/ui/Button";
 import { cx } from "../../../lib/utils";
 
-const EXAMS: { id: ExamType; blurb: string }[] = [
-  { id: "JAMB", blurb: "UTME — university entry" },
-  { id: "WAEC", blurb: "West African exams council" },
-  { id: "NECO", blurb: "National exams council" },
-  { id: "Post-UTME", blurb: "University screening" },
-  { id: "BECE", blurb: "Junior secondary exit" },
-  { id: "Common Entrance", blurb: "Secondary school entry" },
-];
+const EXAM_BLURBS: Record<ExamType, string> = {
+  JAMB: "UTME — university entry",
+  WAEC: "West African exams council",
+  NECO: "National exams council",
+  "Post-UTME": "University screening",
+  BECE: "Junior secondary exit",
+  "Common Entrance": "Secondary school entry",
+};
 
 interface Props {
   value: ExamType | null;
+  /** Which exams are valid for the student's chosen education level (lib/educationLevel.ts). */
+  allowedExams: ExamType[];
   onChange: (exam: ExamType) => void;
   onNext: () => void;
   error?: string;
 }
 
-export function ExamStep({ value, onChange, onNext, error }: Props) {
+export function ExamStep({ value, allowedExams, onChange, onNext, error }: Props) {
+  // Primary and Junior Secondary each have exactly one valid exam — pick it
+  // for the student rather than making them tap a single-option list.
+  useEffect(() => {
+    if (!value && allowedExams.length === 1) onChange(allowedExams[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allowedExams]);
+
+  const exams = allowedExams.map((id) => ({ id, blurb: EXAM_BLURBS[id] }));
+
   return (
     <div className="space-y-5">
       <div className="space-y-1">
@@ -27,7 +39,7 @@ export function ExamStep({ value, onChange, onNext, error }: Props) {
       </div>
 
       <div role="radiogroup" aria-label="Choose your exam" className="grid grid-cols-2 gap-2.5">
-        {EXAMS.map((exam) => {
+        {exams.map((exam) => {
           const selected = value === exam.id;
           return (
             <button

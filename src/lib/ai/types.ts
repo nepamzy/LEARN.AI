@@ -11,6 +11,11 @@ export interface TutorRequest {
   history: TutorTurn[];
   subjectId?: string;
   topicName?: string;
+  // "primary" | "junior-secondary" | "senior-secondary" (never "university" —
+  // TutorPage shows the coming-soon state instead of calling the proxy at
+  // all for that level). Matches EducationLevel minus "university"; kept as
+  // a plain string here so this file doesn't need to import lib/types.ts.
+  level?: string;
 }
 
 export interface RubricCriterion {

@@ -85,6 +85,44 @@ async function expectText(page, text, timeout = 10000) {
   }
 }
 
+async function expectChecked(page, roleName, timeout = 3000) {
+  try {
+    await page.getByRole("radio", { name: roleName, checked: true }).waitFor({ state: "visible", timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Onboarding-specific context: deliberately does NOT set astra:onboardingComplete,
+// so OnboardingFlow actually renders instead of being skipped (Phase 7 tests).
+async function newOnboardingPage(browser) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  return { context, page, errors };
+}
+
+const DEFAULT_PREFS = { language: "en", fontSize: "default", reducedMotion: false, lowDataMode: false, notificationsEnabled: null };
+
+// Post-onboarding context with a specific education-level override already
+// saved, as OnboardingFlow.finish() would leave it (Phase 7 downstream-gating tests).
+async function newPageWithLevel(browser, educationLevel) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await context.addInitScript(
+    (prefs) => {
+      localStorage.setItem("astra:onboardingComplete", "true");
+      localStorage.setItem("astra:prefs", JSON.stringify(prefs));
+    },
+    { ...DEFAULT_PREFS, educationLevel }
+  );
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  return { context, page, errors };
+}
+
 // Writes a pending grading job straight into the app's localStorage, as an
 // interrupted submission would leave it, so recovery can be tested after a reload.
 async function seedPendingJob(page, job) {
@@ -502,6 +540,124 @@ if (!NOT_CONFIGURED) {
     record("no uncaught page errors", errors.length === 0, errors.join(" | "));
     await context.close();
   }
+}
+
+console.log("\nOnboarding: education level gates ExamStep's options (Phase 7)");
+console.log("--------------------------------------------------------------------");
+{
+  const { context, page, errors } = await newOnboardingPage(browser);
+  await page.goto(APP_URL);
+  await page.getByRole("button", { name: "Get started" }).click();
+  record("level step asks which level, before any exam is mentioned", await expectText(page, "What level are you studying at?"));
+
+  await page.getByRole("radio", { name: /Primary School/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  record("Primary auto-selects Common Entrance", await expectChecked(page, /Common Entrance/));
+  record("Primary's exam list shows no senior-secondary exam", !(await expectText(page, "JAMB", 1000)) && !(await expectText(page, "WAEC", 500)) && !(await expectText(page, "NECO", 500)) && !(await expectText(page, "Post-UTME", 500)));
+  record("Primary's exam list shows no BECE (Junior Secondary) option either", !(await expectText(page, "BECE", 500)));
+  await page.getByRole("button", { name: "Continue" }).click();
+  record("Primary's subject list excludes Biology (not in Common Entrance's subjects)", !(await expectText(page, "Biology", 1000)));
+  record("Primary's subject list excludes Chemistry", !(await expectText(page, "Chemistry", 500)));
+  record("Primary's subject list still offers Mathematics", await expectText(page, "Mathematics", 500));
+  await page.screenshot({ path: join(SHOTS, "onboarding-primary.png"), fullPage: true });
+  record("no uncaught page errors through the Primary path", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+{
+  const { context, page } = await newOnboardingPage(browser);
+  await page.goto(APP_URL);
+  await page.getByRole("button", { name: "Get started" }).click();
+  await page.getByRole("radio", { name: /Senior Secondary/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  record("Senior Secondary's exam list offers all four senior exams", await expectText(page, "JAMB") && await expectText(page, "WAEC") && await expectText(page, "NECO") && await expectText(page, "Post-UTME"));
+  record("Senior Secondary's exam list never mentions BECE", !(await expectText(page, "BECE", 500)));
+  record("Senior Secondary's exam list never mentions Common Entrance", !(await expectText(page, "Common Entrance", 500)));
+  await context.close();
+}
+{
+  const { context, page } = await newOnboardingPage(browser);
+  await page.goto(APP_URL);
+  await page.getByRole("button", { name: "Get started" }).click();
+  await page.getByRole("radio", { name: /Junior Secondary/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  record("Junior Secondary auto-selects BECE", await expectChecked(page, /BECE/));
+  record("Junior Secondary's exam list shows no senior-secondary exam", !(await expectText(page, "JAMB", 1000)) && !(await expectText(page, "WAEC", 500)));
+  await context.close();
+}
+
+console.log("\nOnboarding: University skips ExamStep and shows the honest notice (Phase 7)");
+console.log("---------------------------------------------------------------------------------");
+{
+  const { context, page, errors } = await newOnboardingPage(browser);
+  await page.goto(APP_URL);
+  await page.getByRole("button", { name: "Get started" }).click();
+  await page.getByRole("radio", { name: /University/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  record("ExamStep's question never appears for University", !(await expectText(page, "Which exam are you preparing for?", 1000)));
+  record("the honest coming-soon notice appears instead", await expectText(page, "University content is coming soon"));
+  record("the notice names what the app DOES support today", await expectText(page, "Common Entrance", 500) && (await expectText(page, "JAMB", 500)));
+  record("account setup is not blocked — Continue is offered, not stuck", await expectText(page, "Continue", 500));
+  await page.getByRole("button", { name: "Continue" }).click();
+  record("onboarding continues normally afterward (date step), not stuck on the notice", !(await expectText(page, "University content is coming soon", 1000)));
+  await page.screenshot({ path: join(SHOTS, "onboarding-university.png"), fullPage: true });
+  record("no uncaught page errors through the University path", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nUniversity downstream: zero secondary-exam content anywhere (Phase 7)");
+console.log("----------------------------------------------------------------------------");
+{
+  const { context, page, errors } = await newPageWithLevel(browser, "university");
+  await page.goto(`${APP_URL}/tutor`);
+  record("Tutor shows the coming-soon state for University, not the chat", await expectText(page, "University content is coming soon"));
+  record("no chat input is rendered — the tutor is never actually reachable", (await page.locator("#tutor-input").count()) === 0);
+  record("no uncaught page errors on the University tutor page", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+{
+  const { context, page } = await newPageWithLevel(browser, "university");
+  await page.goto(`${APP_URL}/exam`);
+  record("Exam simulator shows the coming-soon state for University", await expectText(page, "University content is coming soon"));
+  record("no exam card is shown underneath it", !(await expectText(page, "University entry via UTME", 500)));
+  await context.close();
+}
+{
+  const { context, page } = await newPageWithLevel(browser, "university");
+  await page.goto(`${APP_URL}/assignments`);
+  record("Assignments shows the coming-soon state for University", await expectText(page, "University content is coming soon"));
+  record("no mock assignment (e.g. the JAMB/WAEC-flavoured essay) leaks through", !(await expectText(page, "JAMB/WAEC", 500)));
+  await context.close();
+}
+{
+  const { context, page, errors } = await newPageWithLevel(browser, "university");
+  await page.goto(APP_URL);
+  record("Home shows the coming-soon state for University instead of the secondary-subject dashboard", await expectText(page, "University content is coming soon"));
+  record("no secondary subject mastery card leaks onto the University home screen", !(await expectText(page, "Mathematics", 500)));
+  await page.screenshot({ path: join(SHOTS, "university-home.png"), fullPage: true });
+  record("no uncaught page errors on the University dashboard", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nDemo student unaffected by default (Phase 7 — no onboarding override)");
+console.log("------------------------------------------------------------------------------");
+{
+  // Note: every page also carries a desktop sidebar (hidden at this mobile
+  // viewport, but still in the DOM) showing "{exam} companion" — so a bare
+  // "JAMB"/"Assignments" match can resolve .first() to that hidden element
+  // and time out waiting for it to become visible. Matching longer, page-
+  // specific phrases avoids the collision.
+  const { context, page, errors } = await newPage(browser);
+  await page.goto(`${APP_URL}/profile`);
+  record("the demo student's profile still shows her existing exam (JAMB)", await expectText(page, "JAMB · Exam date"));
+  await page.goto(`${APP_URL}/exam`);
+  record(
+    "the exam simulator still offers the four senior exams for the unmodified demo student",
+    (await expectText(page, "University entry via UTME")) && (await expectText(page, "Senior secondary certificate"))
+  );
+  await page.goto(`${APP_URL}/assignments`);
+  record("assignments still show their existing content for the unmodified demo student", (await expectText(page, "Work set by Astra")) && !(await expectText(page, "coming soon", 1000)));
+  record("no uncaught page errors confirming the demo student is unchanged", errors.length === 0, errors.join(" | "));
+  await context.close();
 }
 
 await browser.close();

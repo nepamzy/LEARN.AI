@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import { OnboardingShell } from "./OnboardingShell";
 import { defaultOnboardingData, EXAM_SUBJECTS, type OnboardingData } from "./types";
+import { allowedExamsForLevel } from "../../lib/educationLevel";
 import { WelcomeStep } from "./steps/WelcomeStep";
+import { EducationLevelStep } from "./steps/EducationLevelStep";
 import { ExamStep } from "./steps/ExamStep";
+import { UniversityNoticeStep } from "./steps/UniversityNoticeStep";
 import { SubjectsStep } from "./steps/SubjectsStep";
 import { DateStep } from "./steps/DateStep";
 import { GoalStep } from "./steps/GoalStep";
@@ -18,6 +21,7 @@ import { useToast } from "../../components/ui/useToast";
 
 const STEP_IDS = [
   "welcome",
+  "education-level",
   "exam",
   "subjects",
   "date",
@@ -44,6 +48,7 @@ export function OnboardingFlow() {
   const draft = useMemo(() => loadLocal<Draft | null>("onboardingDraft", null), []);
   const [data, setData] = useState<OnboardingData>(draft?.data ?? defaultOnboardingData);
   const [stepIndex, setStepIndex] = useState(draft?.stepIndex ?? 0);
+  const [levelError, setLevelError] = useState<string>();
   const [examError, setExamError] = useState<string>();
   const [subjectsError, setSubjectsError] = useState<string>();
   const [consentError, setConsentError] = useState<string>();
@@ -52,8 +57,16 @@ export function OnboardingFlow() {
     setData((d) => ({ ...d, ...p }));
   }
 
-  // Visible steps depend on whether the student chose to take the diagnostic.
-  const visibleSteps = STEP_IDS.filter((id) => id !== "diagnostic-quiz" || data.diagnosticChoice === "taking");
+  // Visible steps depend on whether the student chose to take the diagnostic,
+  // and — University skips ExamStep entirely (§6: no exam exists to choose) —
+  // on whether their education level has one.
+  const isUniversity = data.educationLevel === "university";
+  function stepIsSkipped(id: StepId) {
+    if (id === "diagnostic-quiz") return data.diagnosticChoice !== "taking";
+    if (id === "exam") return isUniversity;
+    return false;
+  }
+  const visibleSteps = STEP_IDS.filter((id) => !stepIsSkipped(id));
   const currentId: StepId = STEP_IDS[stepIndex];
   const visibleIndex = visibleSteps.indexOf(currentId);
 
@@ -63,13 +76,13 @@ export function OnboardingFlow() {
 
   function next() {
     let idx = stepIndex + 1;
-    while (STEP_IDS[idx] === "diagnostic-quiz" && data.diagnosticChoice !== "taking") idx++;
+    while (idx < STEP_IDS.length && stepIsSkipped(STEP_IDS[idx])) idx++;
     setStepIndex(Math.min(idx, STEP_IDS.length - 1));
   }
 
   function back() {
     let idx = stepIndex - 1;
-    while (idx > 0 && STEP_IDS[idx] === "diagnostic-quiz" && data.diagnosticChoice !== "taking") idx--;
+    while (idx > 0 && stepIsSkipped(STEP_IDS[idx])) idx--;
     setStepIndex(Math.max(idx, 0));
   }
 
@@ -86,6 +99,10 @@ export function OnboardingFlow() {
     setPrefs({
       language: data.language,
       notificationsEnabled: data.notificationsChoice === "granted",
+      // Overrides the demo student's level everywhere that reads
+      // effectiveEducationLevel() (lib/educationLevel.ts) — null here would
+      // mean "no override", but finishing onboarding always sets one.
+      educationLevel: data.educationLevel,
     });
     setOnboardingComplete(true);
   }
@@ -99,9 +116,25 @@ export function OnboardingFlow() {
     >
       {currentId === "welcome" && <WelcomeStep onNext={next} />}
 
+      {currentId === "education-level" && (
+        <EducationLevelStep
+          value={data.educationLevel}
+          error={levelError}
+          onChange={(educationLevel) => {
+            // Changing level invalidates whatever exam/subjects were picked
+            // under a previous level — clear them so a stale JAMB selection
+            // can't survive a switch to Primary, for instance.
+            patch({ educationLevel, exam: null, subjects: [] });
+            setLevelError(undefined);
+          }}
+          onNext={() => (data.educationLevel ? next() : setLevelError("Choose a level to continue."))}
+        />
+      )}
+
       {currentId === "exam" && (
         <ExamStep
           value={data.exam}
+          allowedExams={data.educationLevel ? allowedExamsForLevel(data.educationLevel) : []}
           error={examError}
           onChange={(exam) => {
             patch({ exam, subjects: EXAM_SUBJECTS[exam] ?? [] });
@@ -111,9 +144,12 @@ export function OnboardingFlow() {
         />
       )}
 
-      {currentId === "subjects" && (
+      {currentId === "subjects" && isUniversity && <UniversityNoticeStep onNext={next} />}
+
+      {currentId === "subjects" && !isUniversity && (
         <SubjectsStep
           value={data.subjects}
+          allowedSubjectIds={data.exam ? (EXAM_SUBJECTS[data.exam] ?? []) : []}
           error={subjectsError}
           onChange={(subjects) => {
             patch({ subjects });

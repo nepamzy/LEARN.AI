@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { FontSize, Language, SyncState } from "../lib/types";
+import type { EducationLevel, FontSize, Language, SyncState } from "../lib/types";
 
 export interface Preferences {
   language: Language;
@@ -7,6 +7,10 @@ export interface Preferences {
   reducedMotion: boolean;
   lowDataMode: boolean;
   notificationsEnabled: boolean | null; // null = not yet decided
+  // null = no onboarding override yet — effectiveEducationLevel() (lib/educationLevel.ts)
+  // falls back to the demo student's own level, so every existing surface is unaffected
+  // until a real onboarding run sets this.
+  educationLevel: EducationLevel | null;
 }
 
 export interface AppState {

@@ -40,7 +40,12 @@ function cannedReply(userMessage: string, tone: TutorTone): string {
 
 const HISTORY_TURNS = 6;
 
-export async function generateTutorReply(message: string, tone: TutorTone, history: TutorTurn[] = []): Promise<string> {
+export async function generateTutorReply(
+  message: string,
+  tone: TutorTone,
+  history: TutorTurn[] = [],
+  level?: string
+): Promise<string> {
   if (!isAiConfigured()) {
     await new Promise((resolve) => setTimeout(resolve, 900));
     return cannedReply(message, tone);
@@ -50,6 +55,7 @@ export async function generateTutorReply(message: string, tone: TutorTone, histo
     message,
     tone,
     history: history.slice(-HISTORY_TURNS),
+    level,
   };
   const { text } = await callProxy<{ text: string }>("tutor", request);
   if (typeof text !== "string" || !text.trim()) throw new AiUnavailableError("Empty tutor reply");

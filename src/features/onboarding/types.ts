@@ -1,6 +1,7 @@
-import type { ExamType, StudyGoalPace, Language, FontSize } from "../../lib/types";
+import type { EducationLevel, ExamType, StudyGoalPace, Language, FontSize } from "../../lib/types";
 
 export interface OnboardingData {
+  educationLevel: EducationLevel | null;
   exam: ExamType | null;
   subjects: string[];
   examDate: string;
@@ -18,6 +19,7 @@ export interface OnboardingData {
 }
 
 export const defaultOnboardingData: OnboardingData = {
+  educationLevel: null,
   exam: null,
   subjects: [],
   examDate: "",

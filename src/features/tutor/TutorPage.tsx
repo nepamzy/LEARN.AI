@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
-import { Send, ImagePlus, Info, WifiOff, AlertTriangle, RotateCcw } from "lucide-react";
-import { tutorIntro } from "../../lib/mockData";
+import { Send, ImagePlus, Info, WifiOff, AlertTriangle, RotateCcw, GraduationCap } from "lucide-react";
+import { tutorIntro, amara } from "../../lib/mockData";
 import type { ChatMessage } from "../../lib/types";
+import { effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
 import { ChatBubble } from "./components/ChatBubble";
 import { TypingIndicator } from "./components/TypingIndicator";
 import { ToneSelector } from "./components/ToneSelector";
@@ -9,11 +10,13 @@ import { generateTutorReply, promptSuggestions, DAILY_FREE_MESSAGE_LIMIT, type T
 import { AiRateLimitError } from "../../lib/ai/types";
 import { Banner } from "../../components/ui/Banner";
 import { Button } from "../../components/ui/Button";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { Card } from "../../components/ui/Card";
 import { useAppState } from "../../state/useAppState";
 import { useToast } from "../../components/ui/useToast";
 
 export function TutorPage() {
-  const { sync } = useAppState();
+  const { sync, prefs } = useAppState();
   const { show } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>(tutorIntro);
   const [input, setInput] = useState("");
@@ -26,6 +29,8 @@ export function TutorPage() {
   const [serverLimitReached, setServerLimitReached] = useState(false);
   const [messagesSentToday, setMessagesSentToday] = useState(3);
   const listRef = useRef<HTMLDivElement>(null);
+
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
 
   const isOffline = sync.status === "offline";
   const rateLimited = messagesSentToday >= DAILY_FREE_MESSAGE_LIMIT;
@@ -51,7 +56,7 @@ export function TutorPage() {
     scrollToBottom();
 
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
-    generateTutorReply(text.trim(), tone, history)
+    generateTutorReply(text.trim(), tone, history, level)
       .then((content) => {
         const reply: ChatMessage = {
           id: crypto.randomUUID(),
@@ -84,6 +89,20 @@ export function TutorPage() {
     };
     setMessages((m) => [...m, reply]);
     scrollToBottom();
+  }
+
+  // University: never show secondary-exam tutor content, including the
+  // framing — don't even open the chat UI (§6).
+  if (level === "university") {
+    return (
+      <Card>
+        <EmptyState
+          icon={<GraduationCap className="size-6" aria-hidden="true" />}
+          title={UNIVERSITY_COMING_SOON.title}
+          description={UNIVERSITY_COMING_SOON.description}
+        />
+      </Card>
+    );
   }
 
   return (

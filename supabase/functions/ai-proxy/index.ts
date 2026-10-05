@@ -10,6 +10,7 @@
 // limiting is the control that makes that deployment mode safe to use.
 
 import { utcWindowDate, isWithinLimit, isValidStudentId } from "./rateLimit.ts";
+import { tutorIntroForLevel } from "./levelFraming.ts";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const TUTOR_MODEL = "claude-haiku-4-5-20251001";
@@ -81,15 +82,21 @@ async function checkAndIncrementRateLimit(
   return { allowed: isWithinLimit(count, limit), count };
 }
 
-const TUTOR_SYSTEM = `You are Astra, a study tutor for Nigerian secondary-school students preparing for JAMB, WAEC, NECO, Post-UTME, BECE and Common Entrance exams.
-
-Teaching rules:
+// Phase 7: only the opening framing sentence varies by level (tutorIntroForLevel,
+// from the request's "level" field) — the teaching rules below are untouched
+// from Phase 3, per this phase's instruction not to change teaching logic
+// beyond what's needed to scope the framing.
+const TEACHING_RULES = `Teaching rules:
 - For conceptual questions, use short Socratic prompts that help the student reason to the answer.
 - For procedural questions (solving equations, balancing reactions), show direct step-by-step working.
 - Never give the final answer to an active assignment or mock exam question. Teach the method and ask the student to finish.
 - If the student has been wrong several times in this conversation, simplify the explanation and use a concrete example.
 - Keep replies under 150 words unless the student asks for more. Use plain English. Never shame the student.
 - If asked about something outside school subjects, gently steer back to study.`;
+
+function buildTutorSystem(level: unknown): string {
+  return `${tutorIntroForLevel(level)}\n\n${TEACHING_RULES}`;
+}
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
   concise: "Tone: concise. Two to three sentences maximum.",
@@ -184,7 +191,7 @@ async function handleTutor(body: Record<string, unknown>, studentId: string) {
   const result = await callAnthropic(
     TUTOR_MODEL,
     [
-      { text: TUTOR_SYSTEM, cache: true },
+      { text: buildTutorSystem(body.level), cache: true },
       { text: TONE_INSTRUCTIONS[tone], cache: false },
     ],
     messages,

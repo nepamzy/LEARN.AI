@@ -12,6 +12,7 @@ const defaultPrefs: Preferences = {
   reducedMotion: amara.reducedMotion,
   lowDataMode: amara.lowDataMode,
   notificationsEnabled: null,
+  educationLevel: null,
 };
 
 export function AppStateProvider({ children }: { children: ReactNode }) {

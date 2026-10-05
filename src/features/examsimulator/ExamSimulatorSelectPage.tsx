@@ -1,10 +1,32 @@
 import { useNavigate } from "react-router-dom";
 import { examFormats } from "../../lib/examData";
+import { amara } from "../../lib/mockData";
+import { allowedExamsForLevel, effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
 import { Card } from "../../components/ui/Card";
-import { ChevronRight } from "lucide-react";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { ChevronRight, GraduationCap } from "lucide-react";
+import { useAppState } from "../../state/useAppState";
 
 export function ExamSimulatorSelectPage() {
   const navigate = useNavigate();
+  const { prefs } = useAppState();
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+
+  if (level === "university") {
+    return (
+      <Card>
+        <EmptyState
+          icon={<GraduationCap className="size-6" aria-hidden="true" />}
+          title={UNIVERSITY_COMING_SOON.title}
+          description={UNIVERSITY_COMING_SOON.description}
+        />
+      </Card>
+    );
+  }
+
+  // Only the exams valid for this student's level — never shows Primary
+  // material to a Senior Secondary student or vice versa.
+  const availableFormats = examFormats.filter((f) => allowedExamsForLevel(level).includes(f.exam));
 
   return (
     <div className="pb-6 space-y-5 pt-2">
@@ -16,7 +38,7 @@ export function ExamSimulatorSelectPage() {
       </div>
 
       <div className="grid sm:grid-cols-2 gap-3">
-        {examFormats.map((f) => (
+        {availableFormats.map((f) => (
           <Card
             key={f.exam}
             interactive

@@ -3,6 +3,11 @@
 
 export type ExamType = "JAMB" | "WAEC" | "NECO" | "Post-UTME" | "BECE" | "Common Entrance";
 
+// Phase 7: the base scope for everything else the app surfaces to a student.
+// "senior-secondary" covers WAEC/NECO/JAMB/Post-UTME together (a student in
+// that band may be preparing for more than one of them), not a single exam.
+export type EducationLevel = "primary" | "junior-secondary" | "senior-secondary" | "university";
+
 export type StudyGoalPace = "light" | "steady" | "ambitious" | "custom";
 
 export type MasteryStatus = "strong" | "building" | "review" | "support";
@@ -48,6 +53,7 @@ export interface Student {
   id: string;
   name: string;
   avatarInitials: string;
+  educationLevel: EducationLevel;
   exam: ExamType;
   examDate: string; // ISO date
   subjects: string[]; // subject ids

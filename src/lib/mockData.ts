@@ -20,6 +20,7 @@ export const amara: Student = {
   id: "stu_amara",
   name: "Amara",
   avatarInitials: "AO",
+  educationLevel: "senior-secondary",
   exam: "JAMB",
   examDate: "2026-05-16",
   subjects: ["math", "english", "biology", "chemistry"],

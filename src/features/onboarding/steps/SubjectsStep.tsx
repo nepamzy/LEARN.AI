@@ -6,15 +6,19 @@ import { Check } from "lucide-react";
 
 interface Props {
   value: string[];
+  /** Subjects valid for the student's chosen exam (onboarding/types.ts EXAM_SUBJECTS). */
+  allowedSubjectIds: string[];
   onChange: (ids: string[]) => void;
   onNext: () => void;
   error?: string;
 }
 
-export function SubjectsStep({ value, onChange, onNext, error }: Props) {
+export function SubjectsStep({ value, allowedSubjectIds, onChange, onNext, error }: Props) {
   function toggle(id: string) {
     onChange(value.includes(id) ? value.filter((s) => s !== id) : [...value, id]);
   }
+
+  const availableSubjects = subjects.filter((s) => allowedSubjectIds.includes(s.id));
 
   return (
     <div className="space-y-5">
@@ -24,7 +28,7 @@ export function SubjectsStep({ value, onChange, onNext, error }: Props) {
       </div>
 
       <ul className="space-y-2" aria-label="Select subjects">
-        {subjects.map((s) => {
+        {availableSubjects.map((s) => {
           const selected = value.includes(s.id);
           return (
             <li key={s.id}>

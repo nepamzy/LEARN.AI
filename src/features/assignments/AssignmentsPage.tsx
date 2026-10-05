@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { ClipboardCheck } from "lucide-react";
-import { assignments } from "../../lib/mockData";
+import { ClipboardCheck, GraduationCap } from "lucide-react";
+import { assignments, amara } from "../../lib/mockData";
+import { effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
 import { Tabs } from "../../components/ui/Tabs";
 import { AssignmentCard } from "../../components/domain/AssignmentCard";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { Card } from "../../components/ui/Card";
+import { useAppState } from "../../state/useAppState";
 import type { AssignmentStatus } from "../../lib/types";
 
 const TAB_STATUS: Record<string, AssignmentStatus[]> = {
@@ -12,8 +15,29 @@ const TAB_STATUS: Record<string, AssignmentStatus[]> = {
   returned: ["returned"],
 };
 
+// Every current mock assignment is secondary-exam-flavoured (one names
+// JAMB/WAEC explicitly) — there's no real Primary/Junior-Secondary/University
+// assignment content to show honestly yet (§6/§9: don't fabricate it), so
+// only Senior Secondary sees the existing assignment list, unchanged.
+const ASSIGNMENTS_COMING_SOON = {
+  title: "Assignments for your level are coming soon",
+  description: "Astra Study's assignment content is built for Senior Secondary today. We'll let you know as soon as more is ready for your level.",
+};
+
 export function AssignmentsPage() {
   const [tab, setTab] = useState("todo");
+  const { prefs } = useAppState();
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+
+  if (level !== "senior-secondary") {
+    const copy = level === "university" ? UNIVERSITY_COMING_SOON : ASSIGNMENTS_COMING_SOON;
+    return (
+      <Card>
+        <EmptyState icon={<GraduationCap className="size-6" aria-hidden="true" />} title={copy.title} description={copy.description} />
+      </Card>
+    );
+  }
+
   const filtered = assignments.filter((a) => TAB_STATUS[tab].includes(a.status));
 
   return (
