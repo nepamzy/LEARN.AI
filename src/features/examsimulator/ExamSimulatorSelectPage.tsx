@@ -1,11 +1,22 @@
 import { useNavigate } from "react-router-dom";
 import { examFormats } from "../../lib/examData";
 import { amara } from "../../lib/mockData";
-import { allowedExamsForLevel, effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
+import { allowedExamsForLevel, effectiveEducationLevel } from "../../lib/educationLevel";
 import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ChevronRight, GraduationCap } from "lucide-react";
 import { useAppState } from "../../state/useAppState";
+
+// Phase 7b: distinct from UNIVERSITY_COMING_SOON — tutoring and assignments
+// ARE built for university now, so that copy would be false here. There's
+// just no standardized, timed exam format (no JAMB/WAEC/NECO equivalent) for
+// an arbitrary university course to simulate, so this page genuinely has
+// nothing to offer a university student, unlike Tutor/Assignments.
+const EXAM_SIMULATOR_UNIVERSITY_NOTICE = {
+  title: "No exam simulator for your courses",
+  description:
+    "University courses don't have one standardized, timed exam format the way WAEC or JAMB do, so there's nothing to simulate here. Ask Astra about your coursework in the Tutor tab, or request a practice assignment instead.",
+};
 
 export function ExamSimulatorSelectPage() {
   const navigate = useNavigate();
@@ -17,8 +28,8 @@ export function ExamSimulatorSelectPage() {
       <Card>
         <EmptyState
           icon={<GraduationCap className="size-6" aria-hidden="true" />}
-          title={UNIVERSITY_COMING_SOON.title}
-          description={UNIVERSITY_COMING_SOON.description}
+          title={EXAM_SIMULATOR_UNIVERSITY_NOTICE.title}
+          description={EXAM_SIMULATOR_UNIVERSITY_NOTICE.description}
         />
       </Card>
     );

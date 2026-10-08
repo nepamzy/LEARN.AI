@@ -22,6 +22,8 @@ import {
 } from "../src/lib/educationLevel";
 import type { EducationLevel } from "../src/lib/types";
 import { isTutorLevel, tutorIntroForLevel } from "../supabase/functions/ai-proxy/levelFraming";
+import { SEED_COURSES } from "../src/lib/universityCourses";
+import { parseGeneratedAssignment } from "../src/lib/ai/assignmentGeneration";
 
 let passed = 0;
 let failed = 0;
@@ -256,15 +258,20 @@ check("university has no real exam content yet — the honest case", hasExamCont
 check("an onboarding choice overrides the demo student's level", effectiveEducationLevel("primary", "senior-secondary") === "primary");
 check("no onboarding choice (null) falls back to the demo student's level", effectiveEducationLevel(null, "senior-secondary") === "senior-secondary");
 
-console.log("\nTutor framing by level, cross-contamination check (Phase 7)");
+console.log("\nTutor framing by level, cross-contamination check (Phase 7, updated 7b)");
 console.log("---------------------------------------------------------------");
-const introByLevel: Record<EducationLevel | "invalid", string> = {
+// Phase 7b makes "university" a real, fourth TutorLevel (it previously fell
+// back to senior-secondary framing because the tutor was never called for a
+// university student at all). These three assertions are updated — not
+// dropped — to reflect that deliberate change; everything else here is
+// unchanged from Phase 7.
+const introByLevel: Record<EducationLevel, string> = {
   primary: tutorIntroForLevel("primary"),
   "junior-secondary": tutorIntroForLevel("junior-secondary"),
   "senior-secondary": tutorIntroForLevel("senior-secondary"),
-  university: tutorIntroForLevel("university"), // not a TutorLevel — exercises the fallback path, same as "invalid"
-  invalid: tutorIntroForLevel(undefined),
+  university: tutorIntroForLevel("university"),
 };
+const invalidIntro = tutorIntroForLevel(undefined);
 check("primary framing names Common Entrance, never a senior exam", introByLevel.primary.includes("Common Entrance") && !/JAMB|WAEC|NECO|Post-UTME|BECE/.test(introByLevel.primary));
 check("junior-secondary framing names BECE, never a senior or primary exam", introByLevel["junior-secondary"].includes("BECE") && !/JAMB|WAEC|NECO|Post-UTME|Common Entrance/.test(introByLevel["junior-secondary"]));
 check(
@@ -272,10 +279,14 @@ check(
   ["JAMB", "WAEC", "NECO", "Post-UTME"].every((e) => introByLevel["senior-secondary"].includes(e)) &&
     !/BECE|Common Entrance/.test(introByLevel["senior-secondary"])
 );
-check("an unrecognized level (e.g. a stray 'university') falls back to the senior-secondary framing, not a blank or wrong one", introByLevel.university === introByLevel["senior-secondary"]);
-check("a missing level also falls back to senior-secondary, so an older client behaves exactly as before this phase", introByLevel.invalid === introByLevel["senior-secondary"]);
-check("isTutorLevel rejects 'university' — the tutor is never called for it client-side", isTutorLevel("university") === false);
-check("isTutorLevel accepts the three real tutor levels", ["primary", "junior-secondary", "senior-secondary"].every((l) => isTutorLevel(l)));
+check(
+  "university framing (no course given) is its own generic intro, never falls back to senior-secondary or any secondary exam",
+  introByLevel.university !== introByLevel["senior-secondary"] && !/JAMB|WAEC|NECO|Post-UTME|BECE|Common Entrance/.test(introByLevel.university)
+);
+check("a missing level still falls back to senior-secondary, so an older client behaves exactly as before Phase 7", invalidIntro === introByLevel["senior-secondary"]);
+check("a genuinely unrecognized level string also falls back to senior-secondary", tutorIntroForLevel("made-up-level") === introByLevel["senior-secondary"]);
+check("isTutorLevel now accepts 'university' — Phase 7b gives it a real tutor path", isTutorLevel("university") === true);
+check("isTutorLevel accepts all four real tutor levels", ["primary", "junior-secondary", "senior-secondary", "university"].every((l) => isTutorLevel(l)));
 
 console.log("\nDemo student under the new model (Phase 7)");
 console.log("-----------------------------------------------");
@@ -287,6 +298,92 @@ console.log("----------------------------------------");
 check(
   "the existing JAMB/WAEC-naming assignment is real content, confirming why non-senior levels must not see it unfiltered",
   assignments.some((a) => /JAMB|WAEC/.test(a.objective))
+);
+
+console.log("\nUniversity course framing — the any-course mechanism (Phase 7b, §7 test #3)");
+console.log("-----------------------------------------------------------------------------");
+// This is the single most important check in Phase 7b: the exact course name
+// string, verbatim, for a SEEDED course and for a CUSTOM/non-seeded course the
+// student typed themselves — quoted here, not just pass/fail, per the task's
+// explicit instruction not to claim "any course works" without this evidence.
+const seededCourse = SEED_COURSES.find((c) => c.id === "mee-fluids")!; // "Fluid Mechanics" — deliberately not CS/Accounting, to avoid cherry-picking the most common example
+const customCourseName = "Entomology and Pest Management"; // a real, deliberately uncommon Nigerian university course, not seeded anywhere in SEED_COURSES
+const seededIntro = tutorIntroForLevel("university", seededCourse.name);
+const customIntro = tutorIntroForLevel("university", customCourseName);
+console.log(`  seeded course name sent:  "${seededCourse.name}"`);
+console.log(`  seeded course framing:    "${seededIntro}"`);
+console.log(`  custom course name sent:  "${customCourseName}"`);
+console.log(`  custom course framing:    "${customIntro}"`);
+check("the exact seeded course name string appears verbatim in the tutor system prompt", seededIntro.includes(seededCourse.name));
+check("the exact custom/non-seeded course name string appears verbatim in the tutor system prompt", customIntro.includes(customCourseName));
+check(
+  "seeded and custom courses produce structurally identical framing (same sentence shape, only the course name differs) — nothing marks the custom one as second-class",
+  seededIntro.replace(seededCourse.name, "<COURSE>") === customIntro.replace(customCourseName, "<COURSE>")
+);
+check("university framing (seeded course) never names a secondary exam", !/JAMB|WAEC|NECO|BECE|Common Entrance/.test(seededIntro));
+check("university framing (custom course) never names a secondary exam", !/JAMB|WAEC|NECO|BECE|Common Entrance/.test(customIntro));
+check("SEED_COURSES is modest and explicitly partial, not a large hand-authored catalog (§8)", SEED_COURSES.length > 0 && SEED_COURSES.length < 30);
+check("SEED_COURSES spans more than one faculty, so it's not a single-subject sample", new Set(SEED_COURSES.map((c) => c.faculty)).size >= 4);
+
+console.log("\nGenerated assignment validation (Phase 7b)");
+console.log("---------------------------------------------");
+const validGenerated = parseGeneratedAssignment({
+  title: "Fluid Mechanics: Bernoulli's Principle Problem Set",
+  objective: "Apply Bernoulli's equation to practical flow scenarios.",
+  instructions: "Solve the three flow problems below, showing all working.",
+  rubric: [
+    { id: "r1", name: "Correct setup of Bernoulli's equation", maxScore: 10 },
+    { id: "r2", name: "Correct final answers", maxScore: 10 },
+    { maxScore: 5, name: "Clarity of working (no id given)" },
+  ],
+});
+check("parses a well-formed generated assignment", validGenerated.title.includes("Bernoulli"));
+check("keeps every valid rubric criterion", validGenerated.rubric.length === 3);
+check("assigns a stable id to a criterion the model didn't give one", validGenerated.rubric[2].id === "r3");
+check("rounds a non-integer maxScore", (() => {
+  const r = parseGeneratedAssignment({ title: "t", objective: "o", instructions: "i", rubric: [{ id: "r1", name: "n", maxScore: 7.6 }] });
+  return r.rubric[0].maxScore === 8;
+})());
+
+threw = false;
+try {
+  parseGeneratedAssignment({ title: "", objective: "o", instructions: "i", rubric: [{ id: "r1", name: "n", maxScore: 10 }] });
+} catch {
+  threw = true;
+}
+check("rejects a generated assignment with no title", threw);
+
+threw = false;
+try {
+  parseGeneratedAssignment({ title: "t", objective: "o", instructions: "i", rubric: [{ id: "r1", name: "n", maxScore: -5 }, { id: "r2", name: "", maxScore: 10 }] });
+} catch {
+  threw = true;
+}
+check("rejects a generated assignment whose every rubric criterion is invalid (negative score, empty name)", threw);
+
+threw = false;
+try {
+  parseGeneratedAssignment("not an object");
+} catch {
+  threw = true;
+}
+check("rejects a non-object generated-assignment response", threw);
+
+const oversizedRubric = Array.from({ length: 10 }, (_, i) => ({ id: `r${i}`, name: `Criterion ${i}`, maxScore: 10 }));
+const cappedGenerated = parseGeneratedAssignment({ title: "t", objective: "o", instructions: "i", rubric: oversizedRubric });
+check("caps an oversized rubric at 6 criteria", cappedGenerated.rubric.length === 6);
+
+console.log("\nUniversity symmetry — no leakage either direction (Phase 7b, §7 tests #4/#8)");
+console.log("--------------------------------------------------------------------------------");
+check(
+  "no secondary level's framing ever mentions 'course' the way university framing does (no cross-contamination of the new mechanism)",
+  [introByLevel.primary, introByLevel["junior-secondary"], introByLevel["senior-secondary"]].every((intro) => !intro.includes(seededCourse.name))
+);
+check(
+  "university framing is the only one of the four that changes based on a courseName argument",
+  tutorIntroForLevel("primary", seededCourse.name) === introByLevel.primary &&
+    tutorIntroForLevel("junior-secondary", seededCourse.name) === introByLevel["junior-secondary"] &&
+    tutorIntroForLevel("senior-secondary", seededCourse.name) === introByLevel["senior-secondary"]
 );
 
 console.log(`\n${passed} passed, ${failed} failed`);

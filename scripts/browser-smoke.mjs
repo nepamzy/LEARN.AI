@@ -94,6 +94,18 @@ async function expectChecked(page, roleName, timeout = 3000) {
   }
 }
 
+// Unlike expectText, this matches an element's accessible NAME (e.g. an
+// aria-label like "Remove Fluid Mechanics" on an icon-only button), not its
+// visible text content — the two aren't the same thing.
+async function expectRole(page, role, name, timeout = 3000) {
+  try {
+    await page.getByRole(role, { name }).first().waitFor({ state: "visible", timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Onboarding-specific context: deliberately does NOT set astra:onboardingComplete,
 // so OnboardingFlow actually renders instead of being skipped (Phase 7 tests).
 async function newOnboardingPage(browser) {
@@ -108,19 +120,27 @@ const DEFAULT_PREFS = { language: "en", fontSize: "default", reducedMotion: fals
 
 // Post-onboarding context with a specific education-level override already
 // saved, as OnboardingFlow.finish() would leave it (Phase 7 downstream-gating tests).
-async function newPageWithLevel(browser, educationLevel) {
+// Phase 7b: optionally carries a universityProfile too, as finish() would
+// leave it for a university student who added courses during onboarding.
+async function newPageWithLevel(browser, educationLevel, universityProfile) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const store = installGradedSubmissionsFake(context);
+  const proxy = { calls: 0 };
+  context.route("http://localhost:8787/**", (route) => {
+    proxy.calls++;
+    return route.continue();
+  });
   await context.addInitScript(
     (prefs) => {
       localStorage.setItem("astra:onboardingComplete", "true");
       localStorage.setItem("astra:prefs", JSON.stringify(prefs));
     },
-    { ...DEFAULT_PREFS, educationLevel }
+    { ...DEFAULT_PREFS, educationLevel, ...(universityProfile ? { universityProfile } : {}) }
   );
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  return { context, page, errors };
+  return { context, page, errors, store, proxy };
 }
 
 // Writes a pending grading job straight into the app's localStorage, as an
@@ -128,6 +148,24 @@ async function newPageWithLevel(browser, educationLevel) {
 async function seedPendingJob(page, job) {
   await page.goto(`${APP_URL}/tutor`);
   await page.evaluate((j) => localStorage.setItem("astra:pendingGrading", JSON.stringify([j])), job);
+}
+
+// Phase 7b: clicks through every onboarding step after "subjects" (date,
+// goal, diagnostic invite, accessibility, notifications, consent, complete),
+// none of which differ by education level — so a single level-agnostic
+// walk-through is enough to prove a university student can actually finish
+// onboarding and land on a working dashboard, not just complete the
+// course-entry step in isolation.
+async function finishRestOfOnboarding(page) {
+  await page.getByRole("button", { name: "Continue" }).click(); // date
+  await page.getByRole("button", { name: "Continue" }).click(); // goal (default pace already selected)
+  await page.getByRole("button", { name: "Skip for now" }).click(); // diagnostic invite
+  await page.getByRole("radio", { name: /English/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click(); // accessibility
+  await page.getByRole("button", { name: "Not now" }).click(); // notifications
+  await page.getByRole("radio", { name: "I'm 18 or older" }).click();
+  await page.getByRole("button", { name: "Continue" }).click(); // consent
+  await page.getByRole("button", { name: "Go to my dashboard" }).click(); // complete
 }
 
 const ASG1_RUBRIC = [
@@ -585,7 +623,7 @@ console.log("-------------------------------------------------------------------
   await context.close();
 }
 
-console.log("\nOnboarding: University skips ExamStep and shows the honest notice (Phase 7)");
+console.log("\nOnboarding: University skips ExamStep and leads to real course entry (Phase 7b)");
 console.log("---------------------------------------------------------------------------------");
 {
   const { context, page, errors } = await newOnboardingPage(browser);
@@ -594,47 +632,176 @@ console.log("-------------------------------------------------------------------
   await page.getByRole("radio", { name: /University/ }).click();
   await page.getByRole("button", { name: "Continue" }).click();
   record("ExamStep's question never appears for University", !(await expectText(page, "Which exam are you preparing for?", 1000)));
-  record("the honest coming-soon notice appears instead", await expectText(page, "University content is coming soon"));
-  record("the notice names what the app DOES support today", await expectText(page, "Common Entrance", 500) && (await expectText(page, "JAMB", 500)));
-  record("account setup is not blocked — Continue is offered, not stuck", await expectText(page, "Continue", 500));
-  await page.getByRole("button", { name: "Continue" }).click();
-  record("onboarding continues normally afterward (date step), not stuck on the notice", !(await expectText(page, "University content is coming soon", 1000)));
-  await page.screenshot({ path: join(SHOTS, "onboarding-university.png"), fullPage: true });
-  record("no uncaught page errors through the University path", errors.length === 0, errors.join(" | "));
+  record("the real course-entry step appears instead of a dead-end notice", await expectText(page, "What are you studying?"));
+  record("the stale 'coming soon' notice is gone", !(await expectText(page, "coming soon", 500)));
+  await page.screenshot({ path: join(SHOTS, "onboarding-university-courses.png"), fullPage: true });
+  record("no uncaught page errors reaching the course-entry step", errors.length === 0, errors.join(" | "));
   await context.close();
 }
 
-console.log("\nUniversity downstream: zero secondary-exam content anywhere (Phase 7)");
-console.log("----------------------------------------------------------------------------");
+console.log("\nOnboarding: cannot complete University setup with zero courses (Phase 7b, §7 test #6)");
+console.log("-------------------------------------------------------------------------------------------");
+{
+  const { context, page } = await newOnboardingPage(browser);
+  await page.goto(APP_URL);
+  await page.getByRole("button", { name: "Get started" }).click();
+  await page.getByRole("radio", { name: /University/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Continue" }).click(); // attempt to proceed with zero courses
+  record("onboarding refuses to proceed with zero courses", await expectText(page, "Add at least one course to continue."));
+  record("still on the course-entry step, not advanced to Date", await expectText(page, "What are you studying?", 500));
+  await context.close();
+}
+
+// §7 tests #1 and #2 assert the exact mock-proxy reply and its echoed
+// courseName — both require the AI proxy to actually be configured and
+// reachable, so (like the rest of this file's proxy-dependent tests) these
+// only run on the configured-proxy pass. The onboarding/course-entry UI
+// itself (tested above, unconditionally) doesn't depend on the proxy at all.
+if (!NOT_CONFIGURED) {
+  console.log("\nOnboarding -> real tutor chat, SEEDED course (Phase 7b, §7 test #1)");
+  console.log("-------------------------------------------------------------------------");
+  {
+    const { context, page, errors } = await newOnboardingPage(browser);
+    await page.goto(APP_URL);
+    await page.getByRole("button", { name: "Get started" }).click();
+    await page.getByRole("radio", { name: /University/ }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.fill("#course-search", "Fluid");
+    record("a seeded course suggestion appears for a partial match", await expectText(page, "Fluid Mechanics"));
+    await page.getByRole("button", { name: /Fluid Mechanics/ }).click();
+    record("picking the suggestion adds it as a removable chip", await expectRole(page, "button", "Remove Fluid Mechanics", 2000));
+    await page.getByRole("button", { name: "Continue" }).click();
+    record("no 'add at least one course' error once a course is added", !(await expectText(page, "Add at least one course", 500)));
+    await finishRestOfOnboarding(page);
+    record("onboarding actually completes (no longer on the onboarding shell)", !(await expectText(page, "What are you studying?", 1000)));
+
+    await page.goto(`${APP_URL}/tutor`);
+    record("Tutor shows the real chat for a university student with a seeded course, not the coming-soon notice", (await page.locator("#tutor-input").count()) === 1);
+    record("the info banner names the seeded course", await expectText(page, "Tutoring for Fluid Mechanics."));
+    await page.fill("#tutor-input", "Explain the continuity equation");
+    await page.getByRole("button", { name: "Send message" }).click();
+    record("a working reply arrives for the seeded course", await expectText(page, "Mock tutor"));
+    record("the request sent to the proxy carried the exact seeded course name", await expectText(page, "[course: Fluid Mechanics]"));
+    await page.screenshot({ path: join(SHOTS, "university-tutor-seeded.png"), fullPage: true });
+    record("no uncaught page errors through the full seeded-course path", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+
+  console.log("\nOnboarding -> real tutor chat, TYPED NON-SEEDED course (Phase 7b, §7 test #2 — THE KEY CHECK)");
+  console.log("-----------------------------------------------------------------------------------------------------");
+  {
+    const { context, page, errors } = await newOnboardingPage(browser);
+    const customCourse = "Entomology and Pest Management"; // real, deliberately uncommon — not in SEED_COURSES
+    await page.goto(APP_URL);
+    await page.getByRole("button", { name: "Get started" }).click();
+    await page.getByRole("radio", { name: /University/ }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.fill("#course-search", customCourse);
+    record("no seeded suggestion matches this deliberately uncommon course", !(await expectText(page, "Database Management Systems", 500)));
+    await page.getByRole("button", { name: "Add" }).click();
+    record("typing a non-seeded course adds it as a removable chip, exactly like a seeded pick", await expectRole(page, "button", `Remove ${customCourse}`, 2000));
+    await page.getByRole("button", { name: "Continue" }).click();
+    await finishRestOfOnboarding(page);
+
+    await page.goto(`${APP_URL}/tutor`);
+    record("Tutor shows the real chat for the custom course — no degraded UI, no 'course not supported' message", (await page.locator("#tutor-input").count()) === 1);
+    record("no 'course not supported' or similar fallback message appears", !(await expectText(page, "not supported", 500)));
+    record("the info banner names the exact typed course, not a generic placeholder", await expectText(page, `Tutoring for ${customCourse}.`));
+    record("the tone selector is present, same as any other tutor session", await expectText(page, "Concise", 1000) || await expectText(page, "Guided", 500));
+    await page.fill("#tutor-input", "Explain integrated pest management basics");
+    await page.getByRole("button", { name: "Send message" }).click();
+    record("a working reply arrives for the custom course — functionally identical to the seeded path", await expectText(page, "Mock tutor"));
+    record("the request sent to the proxy carried the exact, verbatim custom course name the student typed", await expectText(page, `[course: ${customCourse}]`));
+    record("no failure banner for the custom course", !(await expectText(page, "couldn't respond", 500)));
+    await page.screenshot({ path: join(SHOTS, "university-tutor-custom.png"), fullPage: true });
+    record("no uncaught page errors through the full custom-course path", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+}
+
+console.log("\nUniversity tutor never shows secondary-exam framing (Phase 7b, §7 test #4)");
+console.log("---------------------------------------------------------------------------------");
+{
+  const { context, page } = await newPageWithLevel(browser, "university", {
+    courses: [{ id: "c1", name: "Fluid Mechanics", code: "MEE 301", customAddedByStudent: false }],
+  });
+  await page.goto(`${APP_URL}/tutor`);
+  record("no JAMB/WAEC/NECO/BECE/Common Entrance text appears anywhere on the university tutor page", !(await expectText(page, "JAMB")) && !(await expectText(page, "WAEC", 500)) && !(await expectText(page, "NECO", 500)) && !(await expectText(page, "BECE", 500)) && !(await expectText(page, "Common Entrance", 500)));
+  await context.close();
+}
+
+// Proxy-dependent (generation and grading both need a reachable AI proxy) —
+// same reasoning as the two onboarding->chat blocks above.
+if (!NOT_CONFIGURED) {
+  console.log("\nUniversity assignment: generate -> submit -> grade through the existing pipeline (Phase 7b, §7 test #5)");
+  console.log("-------------------------------------------------------------------------------------------------------------");
+  {
+    const { context, page, errors } = await newPageWithLevel(browser, "university", {
+      courses: [{ id: "c1", name: "Fluid Mechanics", code: "MEE 301", customAddedByStudent: false }],
+    });
+    await page.goto(`${APP_URL}/assignments`);
+    record("university assignments page offers to generate one, not a coming-soon notice", await expectText(page, "Generate assignment"));
+    await page.getByRole("button", { name: /Generate assignment/ }).click();
+    record("a freshly generated assignment scoped to the course appears", await expectText(page, "Fluid Mechanics", 8000));
+    await page.getByLabel("Your response").fill("Applying Bernoulli's principle, the fluid speeds up where the pipe narrows.");
+    await page.getByRole("button", { name: "Submit for grading" }).click();
+    record("the submission is graded through the existing grading pipeline", await expectText(page, "AI practice feedback", 8000));
+    record("the grade is labelled as guidance, not an official grade, same as the secondary pipeline", await expectText(page, "not an official grade"));
+    await page.screenshot({ path: join(SHOTS, "university-assignment-graded.png"), fullPage: true });
+    record("no uncaught page errors through the generate-submit-grade flow", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+}
+
+console.log("\nUniversity downstream, zero courses: defensive fallback (Phase 7b)");
+console.log("------------------------------------------------------------------------");
 {
   const { context, page, errors } = await newPageWithLevel(browser, "university");
   await page.goto(`${APP_URL}/tutor`);
-  record("Tutor shows the coming-soon state for University, not the chat", await expectText(page, "University content is coming soon"));
-  record("no chat input is rendered — the tutor is never actually reachable", (await page.locator("#tutor-input").count()) === 0);
-  record("no uncaught page errors on the University tutor page", errors.length === 0, errors.join(" | "));
+  record("Tutor falls back to the honest notice for a courseless university account (shouldn't happen post-onboarding)", await expectText(page, "University content is coming soon"));
+  record("no chat input is rendered in this edge case", (await page.locator("#tutor-input").count()) === 0);
+  record("no uncaught page errors on the courseless University tutor page", errors.length === 0, errors.join(" | "));
   await context.close();
 }
 {
   const { context, page } = await newPageWithLevel(browser, "university");
   await page.goto(`${APP_URL}/exam`);
-  record("Exam simulator shows the coming-soon state for University", await expectText(page, "University content is coming soon"));
+  record("Exam simulator explains there's no exam to simulate for University, distinct from the old generic notice", await expectText(page, "No exam simulator for your courses"));
   record("no exam card is shown underneath it", !(await expectText(page, "University entry via UTME", 500)));
   await context.close();
 }
 {
   const { context, page } = await newPageWithLevel(browser, "university");
   await page.goto(`${APP_URL}/assignments`);
-  record("Assignments shows the coming-soon state for University", await expectText(page, "University content is coming soon"));
+  record("Assignments shows the courseless fallback notice, not a broken workspace", await expectText(page, "University content is coming soon"));
   record("no mock assignment (e.g. the JAMB/WAEC-flavoured essay) leaks through", !(await expectText(page, "JAMB/WAEC", 500)));
   await context.close();
 }
 {
   const { context, page, errors } = await newPageWithLevel(browser, "university");
   await page.goto(APP_URL);
-  record("Home shows the coming-soon state for University instead of the secondary-subject dashboard", await expectText(page, "University content is coming soon"));
+  record("Home points a university student at Tutor/Assignments instead of a secondary-subject dashboard", await expectText(page, "No structured study plan for university yet"));
   record("no secondary subject mastery card leaks onto the University home screen", !(await expectText(page, "Mathematics", 500)));
   await page.screenshot({ path: join(SHOTS, "university-home.png"), fullPage: true });
   record("no uncaught page errors on the University dashboard", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nSecondary levels still see zero university framing anywhere (Phase 7b, §7 test #8)");
+console.log("----------------------------------------------------------------------------------------");
+if (!NOT_CONFIGURED) {
+  const { context, page } = await newPageWithLevel(browser, "senior-secondary");
+  await page.goto(`${APP_URL}/tutor`);
+  await page.fill("#tutor-input", "Explain simultaneous equations simply");
+  await page.getByRole("button", { name: "Send message" }).click();
+  record("a senior-secondary student's reply never carries a course marker", await expectText(page, "Mock tutor") && !(await expectText(page, "[course:", 500)));
+  await context.close();
+}
+{
+  const { context, page } = await newPageWithLevel(browser, "senior-secondary");
+  await page.goto(`${APP_URL}/assignments`);
+  record("senior-secondary assignments page is the existing one, not the university workspace", await expectText(page, "Work set by Astra") && !(await expectText(page, "Generate assignment", 500)));
   await context.close();
 }
 
@@ -656,6 +823,11 @@ console.log("-------------------------------------------------------------------
   );
   await page.goto(`${APP_URL}/assignments`);
   record("assignments still show their existing content for the unmodified demo student", (await expectText(page, "Work set by Astra")) && !(await expectText(page, "coming soon", 1000)));
+  // Phase 7b: Amara has no universityProfile at all (she's senior-secondary),
+  // so the new course-framing mechanism must be a complete no-op for her.
+  await page.goto(`${APP_URL}/tutor`);
+  record("Amara's tutor banner is the unchanged generic guidance text, not a university course banner", await expectText(page, "This explanation is study guidance."));
+  record("no course selector is rendered for Amara (she has no courses, and isn't university-level)", !(await expectText(page, "Active course", 500)));
   record("no uncaught page errors confirming the demo student is unchanged", errors.length === 0, errors.join(" | "));
   await context.close();
 }

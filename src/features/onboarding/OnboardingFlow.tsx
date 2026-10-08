@@ -5,7 +5,7 @@ import { allowedExamsForLevel } from "../../lib/educationLevel";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { EducationLevelStep } from "./steps/EducationLevelStep";
 import { ExamStep } from "./steps/ExamStep";
-import { UniversityNoticeStep } from "./steps/UniversityNoticeStep";
+import { UniversityCoursesStep } from "./steps/UniversityCoursesStep";
 import { SubjectsStep } from "./steps/SubjectsStep";
 import { DateStep } from "./steps/DateStep";
 import { GoalStep } from "./steps/GoalStep";
@@ -51,6 +51,7 @@ export function OnboardingFlow() {
   const [levelError, setLevelError] = useState<string>();
   const [examError, setExamError] = useState<string>();
   const [subjectsError, setSubjectsError] = useState<string>();
+  const [coursesError, setCoursesError] = useState<string>();
   const [consentError, setConsentError] = useState<string>();
 
   function patch(p: Partial<OnboardingData>) {
@@ -103,6 +104,16 @@ export function OnboardingFlow() {
       // effectiveEducationLevel() (lib/educationLevel.ts) — null here would
       // mean "no override", but finishing onboarding always sets one.
       educationLevel: data.educationLevel,
+      // Phase 7b: only set for University — every other level has nothing to put here.
+      universityProfile:
+        data.educationLevel === "university"
+          ? {
+              institution: data.universityInstitution.trim() || undefined,
+              faculty: data.universityFaculty.trim() || undefined,
+              program: data.universityProgram.trim() || undefined,
+              courses: data.universityCourses,
+            }
+          : undefined,
     });
     setOnboardingComplete(true);
   }
@@ -144,7 +155,23 @@ export function OnboardingFlow() {
         />
       )}
 
-      {currentId === "subjects" && isUniversity && <UniversityNoticeStep onNext={next} />}
+      {currentId === "subjects" && isUniversity && (
+        <UniversityCoursesStep
+          institution={data.universityInstitution}
+          faculty={data.universityFaculty}
+          program={data.universityProgram}
+          courses={data.universityCourses}
+          onChangeInstitution={(universityInstitution) => patch({ universityInstitution })}
+          onChangeFaculty={(universityFaculty) => patch({ universityFaculty })}
+          onChangeProgram={(universityProgram) => patch({ universityProgram })}
+          onChangeCourses={(universityCourses) => {
+            patch({ universityCourses });
+            setCoursesError(undefined);
+          }}
+          error={coursesError}
+          onNext={() => (data.universityCourses.length > 0 ? next() : setCoursesError("Add at least one course to continue."))}
+        />
+      )}
 
       {currentId === "subjects" && !isUniversity && (
         <SubjectsStep

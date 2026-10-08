@@ -31,6 +31,13 @@ export function TutorPage() {
   const listRef = useRef<HTMLDivElement>(null);
 
   const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+  const universityCourses = prefs.universityProfile?.courses ?? [];
+  // Decision, stated plainly: with multiple courses, one is "active" at a
+  // time via the selector below, defaulting to the first added. Switching
+  // changes which course frames the NEXT message sent — it doesn't retag
+  // messages already in the thread.
+  const [activeCourseId, setActiveCourseId] = useState<string | undefined>(() => universityCourses[0]?.id);
+  const activeCourse = universityCourses.find((c) => c.id === activeCourseId) ?? universityCourses[0];
 
   const isOffline = sync.status === "offline";
   const rateLimited = messagesSentToday >= DAILY_FREE_MESSAGE_LIMIT;
@@ -56,7 +63,7 @@ export function TutorPage() {
     scrollToBottom();
 
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
-    generateTutorReply(text.trim(), tone, history, level)
+    generateTutorReply(text.trim(), tone, history, level, activeCourse?.name)
       .then((content) => {
         const reply: ChatMessage = {
           id: crypto.randomUUID(),
@@ -91,9 +98,11 @@ export function TutorPage() {
     scrollToBottom();
   }
 
-  // University: never show secondary-exam tutor content, including the
-  // framing — don't even open the chat UI (§6).
-  if (level === "university") {
+  // Phase 7b: University now gets the real chat (§5) — only a genuinely
+  // course-less university account (shouldn't happen post-onboarding, since
+  // UniversityCoursesStep requires at least one, but possible via a manual
+  // prefs override) falls back to the honest notice instead of a broken chat.
+  if (level === "university" && universityCourses.length === 0) {
     return (
       <Card>
         <EmptyState
@@ -108,8 +117,30 @@ export function TutorPage() {
   return (
     <div className="pb-4 pt-2 flex flex-col h-[calc(100vh-7rem)] lg:h-[calc(100vh-6rem)]">
       <Banner tone="info" icon={<Info className="size-4 shrink-0" aria-hidden="true" />} className="mb-3">
-        This explanation is study guidance. Check with your teacher for high-stakes submissions.
+        {level === "university"
+          ? `Tutoring for ${activeCourse?.name}. This is study guidance, not official course material.`
+          : "This explanation is study guidance. Check with your teacher for high-stakes submissions."}
       </Banner>
+
+      {level === "university" && universityCourses.length > 1 && (
+        <div className="mb-3">
+          <label htmlFor="course-select" className="sr-only">
+            Active course
+          </label>
+          <select
+            id="course-select"
+            value={activeCourse?.id}
+            onChange={(e) => setActiveCourseId(e.target.value)}
+            className="w-full rounded-xl border border-border-strong px-3.5 py-2.5 text-[15px] bg-surface focus:border-sage transition-colors"
+          >
+            {universityCourses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="mb-3">
         <ToneSelector value={tone} onChange={setTone} />

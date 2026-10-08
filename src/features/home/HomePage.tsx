@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { todayPlan, subjectMastery, insights, amara } from "../../lib/mockData";
-import { effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
+import { effectiveEducationLevel } from "../../lib/educationLevel";
 import { GreetingHeader } from "./components/GreetingHeader";
 import { NextBestStepCard } from "./components/NextBestStepCard";
 import { TodaysPlanTimeline } from "./components/TodaysPlanTimeline";
@@ -54,15 +54,34 @@ export function HomePage() {
   // University: the dashboard below (today's plan, subject mastery, insights)
   // is entirely built from secondary-level subjects — showing it unfiltered
   // would be exactly the silent fallback to secondary content §6 forbids.
+  // Phase 7b: Tutor and Assignments are now real for university, so this
+  // notice points there instead of claiming nothing is built — only the
+  // structured plan/mastery/insight widgets below genuinely don't exist yet
+  // for university courses (no question bank, no BKT tracking — §8).
   if (level === "university") {
+    const courseNames = (prefs.universityProfile?.courses ?? []).map((c) => c.name);
     return (
       <div className="pb-6 space-y-5">
         <GreetingHeader />
         <Card>
           <EmptyState
             icon={<GraduationCap className="size-6" aria-hidden="true" />}
-            title={UNIVERSITY_COMING_SOON.title}
-            description={UNIVERSITY_COMING_SOON.description}
+            title="No structured study plan for university yet"
+            description={
+              courseNames.length > 0
+                ? `Astra doesn't have a tracked mastery plan for ${courseNames.join(", ")} yet — that's a future phase. But the AI Tutor and Assignments already work for these courses right now.`
+                : "Astra doesn't have a tracked mastery plan for university courses yet — that's a future phase. But the AI Tutor and Assignments already work for any course you name."
+            }
+            action={
+              <div className="flex flex-wrap gap-2">
+                <Link to="/tutor" className="text-sm font-semibold text-sage hover:underline">
+                  Go to Tutor
+                </Link>
+                <Link to="/assignments" className="text-sm font-semibold text-sage hover:underline">
+                  Go to Assignments
+                </Link>
+              </div>
+            }
           />
         </Card>
       </div>

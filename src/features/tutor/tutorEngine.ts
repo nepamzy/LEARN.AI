@@ -44,7 +44,8 @@ export async function generateTutorReply(
   message: string,
   tone: TutorTone,
   history: TutorTurn[] = [],
-  level?: string
+  level?: string,
+  courseName?: string
 ): Promise<string> {
   if (!isAiConfigured()) {
     await new Promise((resolve) => setTimeout(resolve, 900));
@@ -56,6 +57,7 @@ export async function generateTutorReply(
     tone,
     history: history.slice(-HISTORY_TURNS),
     level,
+    courseName,
   };
   const { text } = await callProxy<{ text: string }>("tutor", request);
   if (typeof text !== "string" || !text.trim()) throw new AiUnavailableError("Empty tutor reply");

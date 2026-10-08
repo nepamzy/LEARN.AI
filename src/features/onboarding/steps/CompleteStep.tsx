@@ -11,6 +11,7 @@ interface Props {
 export function CompleteStep({ data, onFinish }: Props) {
   const subjectNames = data.subjects.map((id) => getSubject(id)?.name).filter(Boolean);
   const isUniversity = data.educationLevel === "university";
+  const courseNames = data.universityCourses.map((c) => c.name);
 
   return (
     <div className="space-y-6 text-center">
@@ -18,10 +19,13 @@ export function CompleteStep({ data, onFinish }: Props) {
         <CheckCircle2 className="size-8 text-sage" aria-hidden="true" />
       </span>
       <div className="space-y-2">
-        <h2 className="text-xl font-bold text-ink">{isUniversity ? "Your account is ready." : "Your first study plan is ready."}</h2>
+        <h2 className="text-xl font-bold text-ink">{isUniversity ? "You're all set." : "Your first study plan is ready."}</h2>
         <p className="text-[15px] text-ink-secondary leading-relaxed">
           {isUniversity ? (
-            "You're set up as a University/Tertiary account. We'll let you know as soon as university-level content is ready — in the meantime your account is fully set up."
+            <>
+              {data.universityProgram ? `We've set you up for ${data.universityProgram}` : "You're set up"} — {courseNames.join(", ")}.
+              Ask Astra about any of these courses, or anything else in your coursework, any time.
+            </>
           ) : (
             <>
               We've set up {data.exam ?? "your exam"} prep across {subjectNames.join(", ") || "your subjects"}.

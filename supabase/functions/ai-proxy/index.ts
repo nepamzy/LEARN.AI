@@ -94,8 +94,8 @@ const TEACHING_RULES = `Teaching rules:
 - Keep replies under 150 words unless the student asks for more. Use plain English. Never shame the student.
 - If asked about something outside school subjects, gently steer back to study.`;
 
-function buildTutorSystem(level: unknown): string {
-  return `${tutorIntroForLevel(level)}\n\n${TEACHING_RULES}`;
+function buildTutorSystem(level: unknown, courseName: unknown): string {
+  return `${tutorIntroForLevel(level, courseName)}\n\n${TEACHING_RULES}`;
 }
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
@@ -114,6 +114,7 @@ Rules:
 - Respond with ONLY a JSON object, no prose, in this shape:
 {"criteria":[{"criterionId":"...","score":0,"feedback":"...","quotes":["..."]}],"strengths":["..."],"improvements":["..."]}`;
 
+const MAX_COURSE_NAME = 200;
 const MAX_MESSAGE = 2000;
 const MAX_HISTORY_TURNS = 6;
 const MAX_TURN_CHARS = 2000;
@@ -187,11 +188,12 @@ async function handleTutor(body: Record<string, unknown>, studentId: string) {
         .map((t) => ({ role: t.role === "tutor" ? "assistant" : "user", content: t.content }))
     : [];
 
+  const courseName = typeof body.courseName === "string" ? body.courseName.slice(0, MAX_COURSE_NAME) : undefined;
   const messages = [...history, { role: "user", content: body.message }];
   const result = await callAnthropic(
     TUTOR_MODEL,
     [
-      { text: buildTutorSystem(body.level), cache: true },
+      { text: buildTutorSystem(body.level, courseName), cache: true },
       { text: TONE_INSTRUCTIONS[tone], cache: false },
     ],
     messages,
@@ -199,6 +201,52 @@ async function handleTutor(body: Record<string, unknown>, studentId: string) {
   );
   if ("error" in result) return json({ error: result.error }, result.error === "rate_limited" ? 429 : 502);
   return json({ text: result.text.trim() });
+}
+
+// Phase 7b: assignments for a university course were never AI-generated
+// before this phase — every existing assignment (mockData.ts) is static,
+// hand-authored content. This is genuinely new, not a reuse of an existing
+// generation path (none existed). Grading the result reuses handleGrade
+// unchanged (§6) — this handler only produces the assignment itself.
+const ASSIGNMENT_GENERATION_SYSTEM = `You design short practice assignments for Nigerian university students, scoped to one named course. This is practice work, not an official assessment.
+
+Rules:
+- Create ONE assignment: a clear title, a one-sentence learning objective, 2-4 sentences of instructions, and a marking rubric of 2-4 criteria whose maxScores sum to a sensible total (e.g. 20 or 40).
+- Base the assignment on genuine knowledge of the named course. If the course name is unfamiliar or ambiguous, make a reasonable, honest assumption about what it likely covers and design accordingly — do not refuse and do not ask a clarifying question.
+- Respond with ONLY a JSON object, no prose, in this shape:
+{"title":"...","objective":"...","instructions":"...","rubric":[{"id":"r1","name":"...","maxScore":10}]}`;
+
+const MAX_GENERATED_CRITERIA = 6;
+
+// Shares the grading rate-limit bucket ("grade", not a new one) — both are
+// Sonnet-backed, assignment-lifecycle actions, and the existing table's
+// endpoint column is a CHECK constraint over ('tutor','grade'); reusing
+// "grade" means no migration is needed for this new capability. Trade-off:
+// generating several drafts before submitting any eats into the same daily
+// grading allowance — acceptable at this stage, stated in the Phase 7b report.
+async function handleGenerateAssignment(body: Record<string, unknown>, studentId: string) {
+  if (!isString(body.courseName, MAX_COURSE_NAME)) return json({ error: "invalid_course" }, 400);
+
+  const limit = await checkAndIncrementRateLimit(studentId, "grade", GRADING_DAILY_LIMIT, new Date());
+  if (!limit.allowed) {
+    return json({ error: "daily_limit_reached", endpoint: "grade", limit: GRADING_DAILY_LIMIT }, 429);
+  }
+
+  const userPrompt = `Course: ${body.courseName}\n\nDesign one practice assignment for this course.`;
+  const result = await callAnthropic(GRADING_MODEL, [{ text: ASSIGNMENT_GENERATION_SYSTEM, cache: true }], [{ role: "user", content: userPrompt }], 800);
+  if ("error" in result) return json({ error: result.error }, result.error === "rate_limited" ? 429 : 502);
+
+  const match = result.text.match(/\{[\s\S]*\}/);
+  if (!match) return json({ error: "unparseable" }, 502);
+  try {
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+    if (Array.isArray(parsed.rubric) && parsed.rubric.length > MAX_GENERATED_CRITERIA) {
+      parsed.rubric = parsed.rubric.slice(0, MAX_GENERATED_CRITERIA);
+    }
+    return json(parsed);
+  } catch {
+    return json({ error: "unparseable" }, 502);
+  }
 }
 
 async function handleGrade(body: Record<string, unknown>, studentId: string) {
@@ -216,7 +264,14 @@ async function handleGrade(body: Record<string, unknown>, studentId: string) {
   const rubric = body.rubric as { id: unknown; name: unknown; maxScore: unknown }[];
   const rubricLines = rubric.map((r) => `- ${String(r.id)} | ${String(r.name)} | max ${String(r.maxScore)}`).join("\n");
 
-  const userPrompt = `Assignment: ${body.assignmentTitle}
+  // Phase 7b: course context folded into the existing grading prompt, not a
+  // second pipeline — GRADING_SYSTEM's rules are unchanged, this just tells
+  // the same prompt which course the work is for, when there is one
+  // (secondary-level submissions never send this).
+  const courseName = typeof body.courseName === "string" ? body.courseName.slice(0, MAX_COURSE_NAME) : undefined;
+  const courseLine = courseName ? `Course: ${courseName}\n` : "";
+
+  const userPrompt = `${courseLine}Assignment: ${body.assignmentTitle}
 Learning objective: ${body.objective}
 
 Rubric (id | criterion | max score):
@@ -254,5 +309,6 @@ Deno.serve(async (req) => {
 
   if (body.kind === "tutor") return handleTutor(body, body.studentId);
   if (body.kind === "grade") return handleGrade(body, body.studentId);
+  if (body.kind === "generate-assignment") return handleGenerateAssignment(body, body.studentId);
   return json({ error: "unknown_kind" }, 400);
 });

@@ -1,9 +1,13 @@
-import type { EducationLevel, ExamType, StudyGoalPace, Language, FontSize } from "../../lib/types";
+import type { EducationLevel, ExamType, StudyGoalPace, Language, FontSize, UniversityCourse } from "../../lib/types";
 
 export interface OnboardingData {
   educationLevel: EducationLevel | null;
   exam: ExamType | null;
   subjects: string[];
+  universityInstitution: string;
+  universityFaculty: string;
+  universityProgram: string;
+  universityCourses: UniversityCourse[];
   examDate: string;
   examDateUnknown: boolean;
   goalPace: StudyGoalPace;
@@ -22,6 +26,10 @@ export const defaultOnboardingData: OnboardingData = {
   educationLevel: null,
   exam: null,
   subjects: [],
+  universityInstitution: "",
+  universityFaculty: "",
+  universityProgram: "",
+  universityCourses: [],
   examDate: "",
   examDateUnknown: false,
   goalPace: "steady",

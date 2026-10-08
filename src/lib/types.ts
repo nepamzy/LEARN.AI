@@ -8,6 +8,24 @@ export type ExamType = "JAMB" | "WAEC" | "NECO" | "Post-UTME" | "BECE" | "Common
 // that band may be preparing for more than one of them), not a single exam.
 export type EducationLevel = "primary" | "junior-secondary" | "senior-secondary" | "university";
 
+// Phase 7b: a course a university student is actually taking. customAddedByStudent
+// distinguishes a typed-in course from a SEED_COURSES pick — not for showing it
+// any differently in the UI (a typed course is never second-class there), but
+// so tests can confirm the tutor/assignment paths treat both identically.
+export interface UniversityCourse {
+  id: string;
+  name: string;
+  code?: string;
+  customAddedByStudent: boolean;
+}
+
+export interface UniversityProfile {
+  institution?: string;
+  faculty?: string;
+  program?: string;
+  courses: UniversityCourse[];
+}
+
 export type StudyGoalPace = "light" | "steady" | "ambitious" | "custom";
 
 export type MasteryStatus = "strong" | "building" | "review" | "support";

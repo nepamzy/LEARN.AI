@@ -1,5 +1,5 @@
 import { createContext } from "react";
-import type { EducationLevel, FontSize, Language, SyncState } from "../lib/types";
+import type { EducationLevel, FontSize, Language, SyncState, UniversityProfile } from "../lib/types";
 
 export interface Preferences {
   language: Language;
@@ -11,6 +11,11 @@ export interface Preferences {
   // falls back to the demo student's own level, so every existing surface is unaffected
   // until a real onboarding run sets this.
   educationLevel: EducationLevel | null;
+  // Phase 7b: set once at onboarding for a University-level account, same
+  // pattern and same justification as educationLevel — Student has never
+  // lived in a queried Supabase table, so there's nothing to migrate.
+  // Undefined for every non-university account.
+  universityProfile?: UniversityProfile;
 }
 
 export interface AppState {

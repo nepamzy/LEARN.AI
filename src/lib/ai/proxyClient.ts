@@ -10,7 +10,7 @@ export function isAiConfigured(): boolean {
   return !!PROXY_URL;
 }
 
-export async function callProxy<T>(kind: "tutor" | "grade", body: unknown): Promise<T> {
+export async function callProxy<T>(kind: "tutor" | "grade" | "generate-assignment", body: unknown): Promise<T> {
   if (!PROXY_URL) throw new AiUnavailableError();
 
   const controller = new AbortController();

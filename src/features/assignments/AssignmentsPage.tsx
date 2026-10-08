@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { Card } from "../../components/ui/Card";
 import { useAppState } from "../../state/useAppState";
 import type { AssignmentStatus } from "../../lib/types";
+import { UniversityAssignmentWorkspace } from "./UniversityAssignmentWorkspace";
 
 const TAB_STATUS: Record<string, AssignmentStatus[]> = {
   todo: ["todo", "overdue"],
@@ -28,12 +29,27 @@ export function AssignmentsPage() {
   const [tab, setTab] = useState("todo");
   const { prefs } = useAppState();
   const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+  const universityCourses = prefs.universityProfile?.courses ?? [];
+
+  // Phase 7b: University now gets a real, AI-generated-per-request assignment
+  // flow (§6) — only a genuinely course-less university account (shouldn't
+  // happen post-onboarding, same defensive case as TutorPage) falls back to
+  // the honest notice instead of a workspace with nothing to scope to.
+  if (level === "university") {
+    if (universityCourses.length === 0) {
+      return (
+        <Card>
+          <EmptyState icon={<GraduationCap className="size-6" aria-hidden="true" />} title={UNIVERSITY_COMING_SOON.title} description={UNIVERSITY_COMING_SOON.description} />
+        </Card>
+      );
+    }
+    return <UniversityAssignmentWorkspace courses={universityCourses} />;
+  }
 
   if (level !== "senior-secondary") {
-    const copy = level === "university" ? UNIVERSITY_COMING_SOON : ASSIGNMENTS_COMING_SOON;
     return (
       <Card>
-        <EmptyState icon={<GraduationCap className="size-6" aria-hidden="true" />} title={copy.title} description={copy.description} />
+        <EmptyState icon={<GraduationCap className="size-6" aria-hidden="true" />} title={ASSIGNMENTS_COMING_SOON.title} description={ASSIGNMENTS_COMING_SOON.description} />
       </Card>
     );
   }

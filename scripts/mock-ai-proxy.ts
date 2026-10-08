@@ -5,6 +5,10 @@
 // The 429 body/status mirrors exactly what the real ai-proxy function returns
 // once its Phase 4 rate limit is hit (see supabase/functions/ai-proxy/index.ts),
 // so this exercises the real client-side AiRateLimitError path end-to-end.
+// Phase 7b: when a tutor request carries courseName (university), the mock
+// reply echoes it back verbatim — this is what lets browser-smoke.mjs prove
+// end-to-end (not just unit-level) that an arbitrary typed course name
+// actually reaches the proxy request body, for a seeded AND a custom course.
 import { createServer } from "node:http";
 
 const PORT = 8787;
@@ -30,8 +34,9 @@ createServer((req, res) => {
       if (String(body.message).includes("RATELIMIT")) return send(res, 429, { error: "daily_limit_reached", endpoint: "tutor", limit: 40 });
       if (String(body.message).includes("SLOW")) await new Promise((r) => setTimeout(r, 6000));
       if (String(body.message).includes("FAIL")) return send(res, 502, { error: "upstream" });
+      const courseSuffix = body.courseName ? ` [course: ${body.courseName}]` : "";
       return send(res, 200, {
-        text: `Mock tutor (${body.tone}): think about which letter cancels when you add the two equations. What do you get?`,
+        text: `Mock tutor (${body.tone}): think about which letter cancels when you add the two equations. What do you get?${courseSuffix}`,
       });
     }
 
@@ -48,6 +53,21 @@ createServer((req, res) => {
         criteria,
         strengths: ["Mock strength: clear opening."],
         improvements: ["Mock improvement: add a concrete example."],
+      });
+    }
+
+    // Phase 7b: mirrors handleGenerateAssignment's real response shape, scoped
+    // to whatever course name the client sent — including a non-seeded one.
+    if (body.kind === "generate-assignment") {
+      const course = String(body.courseName ?? "your course");
+      return send(res, 200, {
+        title: `Practice assignment: ${course}`,
+        objective: `Check understanding of a core concept in ${course}.`,
+        instructions: `Write a short response applying a key idea from ${course} to a practical example.`,
+        rubric: [
+          { id: "r1", name: "Understanding of the concept", maxScore: 10 },
+          { id: "r2", name: "Quality of the example", maxScore: 10 },
+        ],
       });
     }
 
