@@ -1,4 +1,4 @@
-import { supabase, DEMO_STUDENT_ID } from "../supabase";
+import { supabase, getCurrentStudentId } from "../supabase";
 import { recordToRow, rowToRecord, type GradedRecord, type GradedSubmissionRow } from "../ai/gradedRecord";
 
 // Idempotent on the client-generated id: a retry after a lost response does
@@ -6,7 +6,7 @@ import { recordToRow, rowToRecord, type GradedRecord, type GradedSubmissionRow }
 export async function saveGradedRecord(record: GradedRecord): Promise<void> {
   const { error } = await supabase
     .from("graded_submissions")
-    .upsert(recordToRow(record, DEMO_STUDENT_ID), { onConflict: "id", ignoreDuplicates: true });
+    .upsert(recordToRow(record, getCurrentStudentId()), { onConflict: "id", ignoreDuplicates: true });
   if (error) throw error;
 }
 
@@ -16,7 +16,7 @@ export async function fetchLatestGradedRecord(assignmentId: string): Promise<Gra
   const { data, error } = await supabase
     .from("graded_submissions")
     .select("*")
-    .eq("student_id", DEMO_STUDENT_ID)
+    .eq("student_id", getCurrentStudentId())
     .eq("assignment_id", assignmentId)
     .order("graded_at", { ascending: false })
     .limit(1);

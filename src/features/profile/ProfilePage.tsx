@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, FileDown, Trash2, UserPlus, HelpCircle, FileText, Sparkles } from "lucide-react";
+import { Download, FileDown, Trash2, UserPlus, HelpCircle, FileText, Sparkles, LogOut, CreditCard } from "lucide-react";
 import { ProfileHeaderCard } from "./components/ProfileHeaderCard";
 import { Card } from "../../components/ui/Card";
 import { Switch } from "../../components/ui/Switch";
@@ -8,15 +8,20 @@ import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
 import { CourseEditor } from "../../components/domain/CourseEditor";
 import { useAppState } from "../../state/useAppState";
+import { useAuth } from "../../state/useAuth";
 import { useToast } from "../../components/ui/useToast";
 import { loadLocal } from "../../lib/storage";
 import { amara } from "../../lib/mockData";
 import { effectiveEducationLevel } from "../../lib/educationLevel";
+import { UpgradeModal } from "../billing/UpgradeModal";
+import { WhatsAppLinkCard } from "./components/WhatsAppLinkCard";
 
 export function ProfilePage() {
-  const { prefs, setPrefs, simulateOffline, setSimulateOffline, setOnboardingComplete } = useAppState();
+  const { prefs, setPrefs, simulateOffline, setSimulateOffline, setOnboardingComplete, isPaidAccount, paidUntil } = useAppState();
   const { show } = useToast();
+  const { status, session, signOut } = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [guardianInviteOpen, setGuardianInviteOpen] = useState(false);
   const [guardianEmail, setGuardianEmail] = useState("");
   const onboardingSkipped = loadLocal("onboardingSkipped", false);
@@ -28,6 +33,51 @@ export function ProfilePage() {
       <h2 className="text-xl font-bold text-ink">Profile &amp; settings</h2>
 
       <ProfileHeaderCard />
+
+      {/* Phase 8 §1a: the account's own identity + sign-out — the demo
+          account has neither a real email nor anything to sign out of in
+          the same sense, so this reads honestly for both. */}
+      <Card className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[15px] font-semibold text-ink">
+            {status === "demo" ? "Demo account" : session?.user.email ?? "Account"}
+          </p>
+          <p className="text-sm text-ink-secondary">
+            {status === "demo" ? "Not a real account — nothing here is saved to the cloud." : "Signed in"}
+          </p>
+        </div>
+        <Button variant="secondary" size="sm" onClick={() => void signOut()}>
+          <LogOut className="size-3.5" aria-hidden="true" /> {status === "demo" ? "Exit demo" : "Sign out"}
+        </Button>
+      </Card>
+
+      {/* Phase 8 §1b: real plan status, driven only by the server-set
+          paid_until — never anything this component sets itself. */}
+      <Card className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[15px] font-semibold text-ink inline-flex items-center gap-1.5">
+            {/* Phase 8 §1b: deliberately NOT "Free plan"/"Premium" — ProfileHeaderCard
+                already shows that wording, sourced from the hardcoded demo
+                student's amara.plan field, unrelated to real billing. Distinct
+                wording avoids confusing two differently-sourced badges. */}
+            <CreditCard className="size-4 text-sage" aria-hidden="true" /> {isPaidAccount ? "Paid tier" : "Free tier"}
+          </p>
+          <p className="text-sm text-ink-secondary">
+            {status === "demo"
+              ? "The demo account is always free-tier."
+              : isPaidAccount && paidUntil
+                ? `Renews ${new Date(paidUntil).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+                : `${8} free tutor messages a day`}
+          </p>
+        </div>
+        {!isPaidAccount && status !== "demo" && (
+          <Button size="sm" onClick={() => setUpgradeOpen(true)}>
+            Upgrade
+          </Button>
+        )}
+      </Card>
+
+      {status !== "demo" && <WhatsAppLinkCard />}
 
       {/* Phase 7c §1a: the first edit affordance on this page — add/remove
           courses any time, not just during onboarding. `exam` (the secondary
@@ -238,6 +288,8 @@ export function ProfilePage() {
           onChange={(e) => setGuardianEmail(e.target.value)}
         />
       </Modal>
+
+      <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
     </div>
   );
 }

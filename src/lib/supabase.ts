@@ -13,4 +13,11 @@ export const supabase = createClient(url ?? "", key ?? "");
 // Re-exported from studentId.ts (not defined here) so modules that need only
 // the id/subject constants — not the Supabase client — can import them
 // without pulling in import.meta.env. See studentId.ts for why.
-export { DEMO_STUDENT_ID, LIVE_SUBJECT_IDS, isLiveSubject, type LiveSubjectId } from "./studentId";
+export {
+  DEMO_STUDENT_ID,
+  LIVE_SUBJECT_IDS,
+  isLiveSubject,
+  getCurrentStudentId,
+  setCurrentStudentId,
+  type LiveSubjectId,
+} from "./studentId";

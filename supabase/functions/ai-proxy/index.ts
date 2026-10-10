@@ -9,17 +9,22 @@
 // unlimited number of times against the real Anthropic account. Rate
 // limiting is the control that makes that deployment mode safe to use.
 
-import { utcWindowDate, isWithinLimit, isValidStudentId } from "./rateLimit.ts";
-import { tutorIntroForLevel } from "./levelFraming.ts";
-
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const TUTOR_MODEL = "claude-haiku-4-5-20251001";
-const GRADING_MODEL = "claude-sonnet-5-5";
+import { isValidStudentId } from "./rateLimit.ts";
+import { verifyCallerIdentity } from "./verifyCaller.ts";
+// Phase 8 §1c: the tutor system-prompt + Anthropic-calling logic, AND the
+// rate-limit counter storage, moved to ../_shared/ so
+// whatsapp-webhook/index.ts can call the exact same tutor path AND share
+// the exact same per-student daily bucket — nothing in handleTutor's own
+// behavior changed, only where TEACHING_RULES/callAnthropic/the rate-limit
+// store now live.
+import { GRADING_MODEL, GRADING_SYSTEM, callAnthropic, runTutorTurn } from "../_shared/tutorCore.ts";
+import { checkAndIncrementRateLimit, TUTOR_DAILY_LIMIT, GRADING_DAILY_LIMIT } from "../_shared/rateLimitStore.ts";
 
 // ---- Rate limiting ---------------------------------------------------------
 //
-// Limits, per student per calendar day (UTC), as named constants so they're
-// trivial to change later:
+// Limits, per student per calendar day (UTC) (TUTOR_DAILY_LIMIT/
+// GRADING_DAILY_LIMIT, now defined once in ../_shared/rateLimitStore.ts so
+// whatsapp-webhook/index.ts shares the exact same numbers):
 //   - Tutor is cheap (Haiku, short replies) and used conversationally, so its
 //     limit is generous. Note there is ALSO an existing client-side "free
 //     tier" limit (DAILY_FREE_MESSAGE_LIMIT = 8 in tutorEngine.ts) that
@@ -29,9 +34,7 @@ const GRADING_MODEL = "claude-sonnet-5-5";
 //     the function URL), so it's set well above the client's UX limit.
 //   - Grading is expensive (Sonnet, long output) and a student only submits
 //     a handful of assignments a day in normal use, so its limit is tight.
-const TUTOR_DAILY_LIMIT = 40;
-const GRADING_DAILY_LIMIT = 10;
-
+//
 // Storage: a Postgres table (rate_limit_counters — see
 // supabase/migrations/20261004120000_add_rate_limit_counters.sql), written
 // via this function's service-role key, which bypasses RLS. Chosen over Deno
@@ -51,68 +54,6 @@ const GRADING_DAILY_LIMIT = 10;
 // timestamp per request or a decaying-bucket algorithm, which is more
 // storage and more logic than this phase's threat model (cost control, not
 // precise per-second throttling) justifies.
-
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
-type RateLimitEndpoint = "tutor" | "grade";
-
-async function checkAndIncrementRateLimit(
-  studentId: string,
-  endpoint: RateLimitEndpoint,
-  limit: number,
-  now: Date
-): Promise<{ allowed: boolean; count: number }> {
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-    // Misconfigured deployment (missing env vars) — fail closed rather than
-    // silently allowing unlimited requests.
-    return { allowed: false, count: 0 };
-  }
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/increment_rate_limit`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      apikey: SERVICE_ROLE_KEY,
-      authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-    },
-    body: JSON.stringify({ p_student_id: studentId, p_endpoint: endpoint, p_window_date: utcWindowDate(now) }),
-  });
-  if (!res.ok) return { allowed: false, count: 0 };
-  const count = (await res.json()) as number;
-  return { allowed: isWithinLimit(count, limit), count };
-}
-
-// Phase 7: only the opening framing sentence varies by level (tutorIntroForLevel,
-// from the request's "level" field) — the teaching rules below are untouched
-// from Phase 3, per this phase's instruction not to change teaching logic
-// beyond what's needed to scope the framing.
-const TEACHING_RULES = `Teaching rules:
-- For conceptual questions, use short Socratic prompts that help the student reason to the answer.
-- For procedural questions (solving equations, balancing reactions), show direct step-by-step working.
-- Never give the final answer to an active assignment or mock exam question. Teach the method and ask the student to finish.
-- If the student has been wrong several times in this conversation, simplify the explanation and use a concrete example.
-- Keep replies under 150 words unless the student asks for more. Use plain English. Never shame the student.
-- If asked about something outside school subjects, gently steer back to study.`;
-
-function buildTutorSystem(level: unknown, courseName: unknown): string {
-  return `${tutorIntroForLevel(level, courseName)}\n\n${TEACHING_RULES}`;
-}
-
-const TONE_INSTRUCTIONS: Record<string, string> = {
-  concise: "Tone: concise. Two to three sentences maximum.",
-  guided: "Tone: guided. Ask one leading question at a time.",
-  visual: "Tone: visual. Use a concrete everyday analogy.",
-  "step-by-step": "Tone: step-by-step. Number each step and keep steps short.",
-};
-
-const GRADING_SYSTEM = `You are an experienced Nigerian examiner giving rubric-based guidance on a student's written work. This is practice feedback, not an official grade.
-
-Rules:
-- Score each rubric criterion from 0 to its maxScore. Use integers.
-- Base every score and comment on the student's actual text. Quote short phrases from it in "quotes".
-- Be specific: name what was done well and what is missing. No generic praise.
-- Respond with ONLY a JSON object, no prose, in this shape:
-{"criteria":[{"criterionId":"...","score":0,"feedback":"...","quotes":["..."]}],"strengths":["..."],"improvements":["..."]}`;
 
 const MAX_COURSE_NAME = 200;
 const MAX_MESSAGE = 2000;
@@ -138,37 +79,6 @@ function isString(v: unknown, max: number): v is string {
   return typeof v === "string" && v.length > 0 && v.length <= max;
 }
 
-async function callAnthropic(model: string, system: { text: string; cache: boolean }[], messages: unknown[], maxTokens: number) {
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-  if (!apiKey) return { error: "not_configured" as const };
-
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system: system.map((s) => ({
-        type: "text",
-        text: s.text,
-        ...(s.cache ? { cache_control: { type: "ephemeral" } } : {}),
-      })),
-      messages,
-    }),
-  });
-
-  if (res.status === 429) return { error: "rate_limited" as const };
-  if (!res.ok) return { error: "upstream" as const };
-
-  const data = (await res.json()) as { content?: { type: string; text?: string }[] };
-  const text = (data.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
-  return { text };
-}
-
 async function handleTutor(body: Record<string, unknown>, studentId: string) {
   if (!isString(body.message, MAX_MESSAGE)) return json({ error: "invalid_message" }, 400);
 
@@ -176,8 +86,6 @@ async function handleTutor(body: Record<string, unknown>, studentId: string) {
   if (!limit.allowed) {
     return json({ error: "daily_limit_reached", endpoint: "tutor", limit: TUTOR_DAILY_LIMIT }, 429);
   }
-
-  const tone = typeof body.tone === "string" && TONE_INSTRUCTIONS[body.tone] ? body.tone : "guided";
 
   const history = Array.isArray(body.history)
     ? body.history
@@ -189,16 +97,8 @@ async function handleTutor(body: Record<string, unknown>, studentId: string) {
     : [];
 
   const courseName = typeof body.courseName === "string" ? body.courseName.slice(0, MAX_COURSE_NAME) : undefined;
-  const messages = [...history, { role: "user", content: body.message }];
-  const result = await callAnthropic(
-    TUTOR_MODEL,
-    [
-      { text: buildTutorSystem(body.level, courseName), cache: true },
-      { text: TONE_INSTRUCTIONS[tone], cache: false },
-    ],
-    messages,
-    400
-  );
+  const tone = typeof body.tone === "string" ? body.tone : undefined;
+  const result = await runTutorTurn({ message: body.message, tone, history, level: body.level, courseName });
   if ("error" in result) return json({ error: result.error }, result.error === "rate_limited" ? 429 : 502);
   return json({ text: result.text.trim() });
 }
@@ -306,6 +206,12 @@ Deno.serve(async (req) => {
   }
 
   if (!isValidStudentId(body.studentId)) return json({ error: "invalid_student" }, 400);
+
+  // Phase 8 §1a: the claimed studentId is no longer trusted on its own —
+  // see verifyCaller.ts for exactly what this does and doesn't require
+  // (the demo account still needs nothing; a real account must present a
+  // token that actually verifies as that same user).
+  if (!(await verifyCallerIdentity(req, body.studentId))) return json({ error: "unauthorized" }, 401);
 
   if (body.kind === "tutor") return handleTutor(body, body.studentId);
   if (body.kind === "grade") return handleGrade(body, body.studentId);

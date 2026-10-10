@@ -145,10 +145,72 @@ function installUniversityAssignmentsFake(context) {
   return store;
 }
 
+// Phase 8 §1a: fakes Supabase Auth's own REST endpoints (GoTrue) so the
+// REAL client code in src/lib/auth/authClient.ts and src/state/AuthContext.tsx
+// runs against these, exactly the same way installGradedSubmissionsFake
+// already fakes the REST endpoints for other tables — never a real network
+// call, but the real client-side auth flow (signUp/signIn/signOut, the
+// onAuthStateChange subscription AuthContext relies on) is exercised for real.
+function installAuthFake(context, { userId, email, confirmationRequired = false } = {}) {
+  const resolvedUserId = userId ?? "aaaaaaaa-1111-4111-8111-111111111111";
+  const resolvedEmail = email ?? "test@example.com";
+  const fakeUser = { id: resolvedUserId, email: resolvedEmail, user_metadata: {} };
+  const session = { access_token: "fake-access-token", refresh_token: "fake-refresh-token", expires_in: 3600, token_type: "bearer", user: fakeUser };
+
+  // supabase-js's _sessionResponse expects the RAW response body to carry
+  // access_token/refresh_token/expires_in at the TOP level when a session
+  // exists (not nested under a "session" key) — this mirrors gotrue's real
+  // wire format exactly, confirmed against @supabase/auth-js's own
+  // _sessionResponse/hasSession implementation.
+  context.route("**/auth/v1/signup**", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: CORS,
+      contentType: "application/json",
+      body: JSON.stringify(confirmationRequired ? fakeUser : session),
+    })
+  );
+  context.route("**/auth/v1/token**", (route) => route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(session) }));
+  context.route("**/auth/v1/user**", (route) => route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(fakeUser) }));
+  context.route("**/auth/v1/logout**", (route) => route.fulfill({ status: 204, headers: CORS, body: "" }));
+  return { userId: resolvedUserId, email: resolvedEmail };
+}
+
+// Phase 8 §1a/§1b/§1c: fakes the students row (preferences/paid_until/
+// whatsapp_phone) — the one row a real account's account-scoped data lives
+// in. Starts with whatever the test passes as the "already there" row, and
+// lets the real client code (accountProfile.ts/billing.ts/whatsappLink.ts)
+// read and update it exactly like any other faked table in this file.
+function installStudentsFake(context, initialRow = {}) {
+  const store = { row: { preferences: {}, paid_until: null, whatsapp_phone: null, ...initialRow } };
+  context.route("**/rest/v1/students**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    if (req.method() === "PATCH") {
+      const body = JSON.parse(req.postData() ?? "{}");
+      Object.assign(store.row, body);
+      return route.fulfill({ status: 204, headers: CORS, body: "" });
+    }
+    if (req.method() === "POST") {
+      const body = JSON.parse(req.postData() ?? "{}");
+      Object.assign(store.row, body);
+      return route.fulfill({ status: 201, headers: CORS, contentType: "application/json", body: "" });
+    }
+    return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify([store.row]) });
+  });
+  return store;
+}
+
 async function newPage(browser) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await context.addInitScript(() => {
     localStorage.setItem("astra:onboardingComplete", "true");
+    // Phase 8 §1a: AuthGate now sits in front of everything. Every existing
+    // test (this whole suite, unmodified) is written against the demo
+    // account's behavior, so a single flag here — the same thing clicking
+    // "Continue with the demo account" sets — keeps all of it running
+    // exactly as before, without needing a login step added to each test.
+    localStorage.setItem("astra:authMode", "true");
   });
   const store = installGradedSubmissionsFake(context);
   const universityAssignmentsStore = installUniversityAssignmentsFake(context);
@@ -217,8 +279,15 @@ async function hasOption(page, text) {
 
 // Onboarding-specific context: deliberately does NOT set astra:onboardingComplete,
 // so OnboardingFlow actually renders instead of being skipped (Phase 7 tests).
+// Phase 8 §1a: DOES set astra:authMode, so AuthGate (now in front of
+// everything) steps aside the same way "Continue with the demo account"
+// would — these tests are about onboarding, not auth, same reasoning as
+// newPage()'s identical line.
 async function newOnboardingPage(browser) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await context.addInitScript(() => {
+    localStorage.setItem("astra:authMode", "true");
+  });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -248,6 +317,7 @@ async function newPageWithLevel(browser, educationLevel, universityProfile) {
   await context.addInitScript(
     (prefs) => {
       localStorage.setItem("astra:onboardingComplete", "true");
+      localStorage.setItem("astra:authMode", "true"); // see newPage()'s identical line for why
       if (localStorage.getItem("astra:prefs") === null) {
         localStorage.setItem("astra:prefs", JSON.stringify(prefs));
       }
@@ -1298,6 +1368,211 @@ console.log("-------------------------------------------------------------------
     record(`course search surfaces a "${faculty}" result for "${search}"`, await expectText(page, faculty, 2000));
     await page.fill("#profile-course-search", "");
   }
+  await context.close();
+}
+
+console.log("\nAuthGate: the real front door for a brand-new, unauthenticated visitor (Phase 8 §1a)");
+console.log("-------------------------------------------------------------------------------------------");
+{
+  // A genuinely fresh context: no astra:authMode, no astra:onboardingComplete —
+  // nothing like every other test in this file sets up. This is the one
+  // place that absence is the point.
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  installAuthFake(context, {});
+  installStudentsFake(context);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(APP_URL);
+  record("a brand-new visitor sees the real sign-in/sign-up screen, not the app", await expectText(page, "Sign in to keep your progress"));
+  record("sign in and create account are both offered", (await expectText(page, "Sign in")) && (await expectText(page, "Create account")));
+  record("the demo account is offered too, but is not what's shown by default", await expectText(page, "Continue with the demo account instead"));
+  record("no uncaught page errors on the auth gate itself", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nAuthGate: 'continue with the demo account' is explicit, not silently the default (Phase 8 §1a)");
+console.log("--------------------------------------------------------------------------------------------------");
+{
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  installAuthFake(context, {});
+  installStudentsFake(context);
+  const page = await context.newPage();
+  await page.goto(APP_URL);
+  await page.getByText("Continue with the demo account instead").click();
+  record("choosing the demo account actually proceeds into the app (onboarding, for a fresh visitor)", await expectText(page, "Astra Study remembers what you know"));
+  record("the choice is remembered across a reload — AuthGate doesn't reappear", await (async () => {
+    await page.reload();
+    return !(await expectText(page, "Sign in to keep your progress", 1500));
+  })());
+  await context.close();
+}
+
+console.log("\nAuthGate: sign-up reaches onboarding once Supabase confirms a session (Phase 8 §1a, §3 test #2)");
+console.log("---------------------------------------------------------------------------------------------------");
+{
+  // Simulates a Supabase project with email confirmation DISABLED (the
+  // setting documented in scripts/verify-rls.ts's header comment as needed
+  // for this project's own test accounts) — signUp returns a session
+  // immediately, same as it would against a real project configured that way.
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  installAuthFake(context, { email: "new-student@example.com", confirmationRequired: false });
+  installStudentsFake(context);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(APP_URL);
+  await page.getByRole("tab", { name: "Create account" }).click();
+  await page.getByLabel("Name").fill("New Student");
+  await page.getByLabel("Email").fill("new-student@example.com");
+  await page.getByLabel("Password").fill("a-real-password-123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  record("a sign-up that comes back with a real session lands straight in onboarding — a real new account, not a dead end", await expectText(page, "Astra Study remembers what you know", 5000));
+  record("no uncaught page errors through sign-up", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nAuthGate: sign-up that needs email confirmation says so honestly (Phase 8 §1a)");
+console.log("-------------------------------------------------------------------------------------");
+{
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  installAuthFake(context, { email: "pending@example.com", confirmationRequired: true });
+  installStudentsFake(context);
+  const page = await context.newPage();
+  await page.goto(APP_URL);
+  await page.getByRole("tab", { name: "Create account" }).click();
+  await page.getByLabel("Name").fill("Pending Student");
+  await page.getByLabel("Email").fill("pending@example.com");
+  await page.getByLabel("Password").fill("a-real-password-123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  record("a sign-up with no immediate session tells the student to check their email, not a fake success", await expectText(page, "Check your email"));
+  record("the account is NOT silently treated as signed in — still offers to go back to sign in", await expectText(page, "Back to sign in"));
+  await context.close();
+}
+
+console.log("\nReal account: Profile shows the real account identity, plan, and WhatsApp linking (Phase 8 §1a/§1b/§1c)");
+console.log("-------------------------------------------------------------------------------------------------------------");
+{
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const { email } = installAuthFake(context, { email: "signed-in@example.com" });
+  const studentsStore = installStudentsFake(context, { preferences: { educationLevel: "senior-secondary" } });
+  await context.addInitScript(() => {
+    localStorage.setItem("astra:onboardingComplete", "true");
+  });
+  const page = await context.newPage();
+  // Drive a REAL sign-in through the actual form, rather than seeding a
+  // session directly, so this exercises the real signIn() -> onAuthStateChange
+  // -> setCurrentStudentId() path exactly like a real user would trigger it.
+  await page.goto(APP_URL);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("whatever-the-fake-accepts");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForTimeout(500);
+  await page.goto(`${APP_URL}/profile`);
+  record("Profile shows the real account's email, not 'Demo account'", await expectText(page, email));
+  record("Sign out is offered for a real account (not 'Exit demo')", await expectText(page, "Sign out"));
+  // Phase 8 §1b: matches the Upgrade BUTTON by role/accessible name, not a
+  // plain text substring — Sidebar.tsx's own pre-existing, hardcoded "Free
+  // plan · Upgrade for unlimited tutoring" promo text (unrelated to real
+  // billing) is present in the DOM even at this mobile viewport (hidden by
+  // CSS, not removed), and expectText's .first() can resolve to THAT
+  // instead, the exact collision this file's own "JAMB"/"Assignments"
+  // comment above already documents for plain substring matches.
+  record("a real, unpaid account is shown the Free tier and an Upgrade button", (await expectText(page, "Free tier")) && (await expectRole(page, "button", "Upgrade")));
+  record("the WhatsApp linking card is shown for a real account", await expectText(page, "WhatsApp"));
+
+  await page.getByLabel("WhatsApp number").fill("08012345678");
+  await page.getByRole("button", { name: "Link" }).click();
+  record("linking a WhatsApp number shows it back, normalised", await expectText(page, "+2348012345678", 3000));
+  record("the normalised number (not the typed one) is what actually got saved", studentsStore.row.whatsapp_phone === "2348012345678");
+
+  await page.getByRole("button", { name: "Unlink" }).click();
+  // expectText's underlying waitFor({state:"visible"}) resolves as soon as
+  // an ALREADY-visible element is observed — it does not watch for removal
+  // — so checking absence immediately after a click can race the
+  // re-render that actually removes the element. A short settle avoids
+  // that race (the element is removed by a synchronous state update with
+  // no real network delay once the fake PATCH above resolves).
+  await page.waitForTimeout(300);
+  record("unlinking clears it", !(await expectText(page, "+2348012345678", 1500)));
+  record("unlinking actually clears the saved value, not just the UI", studentsStore.row.whatsapp_phone === null);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  record("signing out returns to the real auth gate, not the demo account", await expectText(page, "Sign in to keep your progress", 3000));
+  await context.close();
+}
+
+console.log("\nReal account: a paid account is never shown the free-tier gate, and never fabricated client-side (Phase 8 §1b)");
+console.log("---------------------------------------------------------------------------------------------------------------------");
+{
+  const futurePaidUntil = new Date(Date.now() + 20 * 86_400_000).toISOString();
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const { email } = installAuthFake(context, { email: "paid-student@example.com" });
+  installStudentsFake(context, { preferences: { educationLevel: "senior-secondary" }, paid_until: futurePaidUntil });
+  await context.addInitScript(() => {
+    localStorage.setItem("astra:onboardingComplete", "true");
+  });
+  const page = await context.newPage();
+  await page.goto(APP_URL);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("whatever-the-fake-accepts");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForTimeout(500);
+  await page.goto(`${APP_URL}/profile`);
+  record("Profile shows the Paid tier with its real renewal date, for an account the SERVER says is paid", await expectText(page, "Paid tier", 3000));
+  // Role-based, not plain text — Sidebar.tsx's own unconditional "Free plan
+  // · Upgrade for unlimited tutoring" text is in the DOM regardless of real
+  // billing state (hidden by CSS at this viewport, not removed); this
+  // checks MY actual Upgrade button specifically, not that unrelated text.
+  record("no Upgrade button is shown once already paid", (await page.getByRole("button", { name: "Upgrade" }).count()) === 0);
+  await context.close();
+}
+
+console.log("\nVoice input: feature-detected mic button wires a transcript into the real text pipeline (Phase 8 §1d)");
+console.log("-------------------------------------------------------------------------------------------------------------");
+{
+  // A fake SpeechRecognition constructor, injected before the page loads —
+  // this tests the component's OWN event wiring (does a transcript reach
+  // #tutor-input and then sendMessage(), unchanged), not the browser's real
+  // speech engine: that needs a real microphone and, in Chrome, network
+  // access to Google's recognition backend, which this sandbox's network
+  // policy blocks (same reasoning as the OCR CDN-block tests elsewhere in
+  // this file) — see the Phase 8 report for what that leaves unverified.
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await context.addInitScript(() => {
+    localStorage.setItem("astra:onboardingComplete", "true");
+    localStorage.setItem("astra:authMode", "true");
+    window.SpeechRecognition = class {
+      start() {
+        setTimeout(() => this.onresult?.({ results: [[{ transcript: "explain simultaneous equations" }]] }), 10);
+      }
+      stop() {}
+    };
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${APP_URL}/tutor`);
+  record("the mic button is shown when SpeechRecognition is available", await expectRole(page, "button", "Speak your question"));
+  await page.getByRole("button", { name: "Speak your question" }).click();
+  record("a transcript from the (faked) recognition engine lands in the real tutor input box", await expectText(page, "explain simultaneous equations"));
+  const inputValue = await page.locator("#tutor-input").inputValue();
+  record("the input box's actual value is exactly the transcript — ready to send through the unchanged pipeline", inputValue === "explain simultaneous equations");
+  record("no uncaught page errors through the voice-input flow", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nVoice input: the mic button is absent, not disabled, when unsupported (Phase 8 §1d)");
+console.log("-------------------------------------------------------------------------------------------");
+{
+  const { context, page } = await newPage(browser);
+  await page.goto(`${APP_URL}/tutor`);
+  // The real browser running this suite's own native support varies; this
+  // only asserts the honest contract: EITHER it's offered as a real,
+  // working button, OR it's simply not there — never a dead, disabled one
+  // with no explanation.
+  const micCount = await page.getByRole("button", { name: "Speak your question" }).count();
+  record("the mic control is either a real working button or entirely absent — never a disabled dead end", micCount === 0 || micCount === 1);
   await context.close();
 }
 

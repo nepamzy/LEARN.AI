@@ -33,6 +33,23 @@ import { assignmentToRow, rowToAssignment, type PersistedUniversityAssignment } 
 import { subjects, topics } from "../src/lib/mockData";
 import { LIVE_SUBJECT_IDS } from "../src/lib/studentId";
 import type { UniversityCourse } from "../src/lib/types";
+import { resolvePrefsOnLogin, isPreferencesEmpty } from "../src/lib/accountPrefsSync";
+import type { Preferences } from "../src/state/appStateTypes";
+import { isPaid as clientIsPaid } from "../src/lib/billing";
+import { normalizePhone as clientNormalizePhone } from "../src/lib/phoneNormalize";
+import { isVoiceInputSupported } from "../src/features/tutor/voiceSupport";
+import {
+  verifyPaystackSignature,
+  parsePaystackEvent,
+  resolvePlanDays,
+  extendPaidUntil,
+  isPaid,
+  DEFAULT_PLAN_DAYS,
+  MAX_PLAN_DAYS,
+} from "../supabase/functions/_shared/paystackSignature";
+import { normalizePhone } from "../supabase/functions/_shared/phoneNormalize";
+import { parseInboundMessage, verifyHandshake, isAssignmentStatusRequest, resolveWhatsAppTutorContext } from "../supabase/functions/_shared/whatsappParsing";
+import { identityMatches, DEMO_STUDENT_ID as PROXY_DEMO_STUDENT_ID } from "../supabase/functions/ai-proxy/verifyCaller";
 
 let passed = 0;
 let failed = 0;
@@ -630,6 +647,151 @@ const assignmentRow = assignmentToRow(persistedAssignment, uniStudentId);
 check("the row carries the student id it was given", assignmentRow.student_id === uniStudentId);
 check("the row maps courseName/createdAt to course_name/created_at", assignmentRow.course_name === persistedAssignment.courseName && assignmentRow.created_at === persistedAssignment.createdAt);
 check("the row round-trips back to the exact same persisted assignment (id, content, and rubric all survive)", JSON.stringify(rowToAssignment(assignmentRow)) === JSON.stringify(persistedAssignment));
+
+console.log("\nAccount prefs migration on first real sign-in (Phase 8 §1a)");
+console.log("------------------------------------------------------------------");
+const localWithData: Preferences = {
+  language: "en",
+  fontSize: "default",
+  reducedMotion: false,
+  lowDataMode: false,
+  notificationsEnabled: null,
+  educationLevel: "senior-secondary",
+};
+const localEmpty: Preferences = { ...localWithData, educationLevel: null };
+check("a Preferences with no educationLevel set counts as empty", isPreferencesEmpty(localEmpty) === true);
+check("a Preferences with educationLevel set does not count as empty", isPreferencesEmpty(localWithData) === false);
+check("null/undefined both count as empty", isPreferencesEmpty(null) === true && isPreferencesEmpty(undefined) === true);
+
+const freshAccountCase = resolvePrefsOnLogin(localWithData, null);
+check("brand-new account + local onboarding data already done -> local data is migrated UP, not dropped", freshAccountCase.next === localWithData && freshAccountCase.shouldPushLocal === true);
+
+const returningAccountCase = resolvePrefsOnLogin(localEmpty, { ...localWithData, educationLevel: "university" });
+check(
+  "returning account with its OWN real data -> that wins over empty/stale local state, and nothing is pushed back up",
+  returningAccountCase.next.educationLevel === "university" && returningAccountCase.shouldPushLocal === false
+);
+
+const neitherCase = resolvePrefsOnLogin(localEmpty, null);
+check("neither side has anything yet -> no-op, onboarding will set it either way", neitherCase.shouldPushLocal === false);
+
+console.log("\nPaystack webhook: signature verification + payload parsing (Phase 8 §1b)");
+console.log("-------------------------------------------------------------------------------");
+const PAYSTACK_SECRET = "sk_test_demo_secret_for_verification_only";
+const examplePayload = JSON.stringify({
+  event: "charge.success",
+  data: { status: "success", reference: "ref_123", metadata: { studentId: "11111111-1111-4111-8111-111111111111" } },
+});
+async function hmacSha512Hex(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+const validSig = await hmacSha512Hex(PAYSTACK_SECRET, examplePayload);
+check("a correctly-signed payload verifies true", (await verifyPaystackSignature(examplePayload, validSig, PAYSTACK_SECRET)) === true);
+check("a tampered body fails verification against the original signature", (await verifyPaystackSignature(examplePayload + "x", validSig, PAYSTACK_SECRET)) === false);
+check("the wrong secret fails verification", (await verifyPaystackSignature(examplePayload, validSig, "wrong_secret")) === false);
+check("a missing signature header fails closed", (await verifyPaystackSignature(examplePayload, null, PAYSTACK_SECRET)) === false);
+check("a non-hex signature header fails closed rather than crashing", (await verifyPaystackSignature(examplePayload, "not-hex-at-all!!", PAYSTACK_SECRET)) === false);
+check("no secret key configured fails closed", (await verifyPaystackSignature(examplePayload, validSig, "")) === false);
+
+check("a well-formed charge.success event parses", parsePaystackEvent(examplePayload)?.event === "charge.success");
+check("garbage JSON does not parse as a Paystack event", parsePaystackEvent("not json") === null);
+check("valid JSON missing the required shape does not parse as a Paystack event", parsePaystackEvent(JSON.stringify({ foo: "bar" })) === null);
+
+check("no planDays in metadata falls back to the default plan length", resolvePlanDays(null) === DEFAULT_PLAN_DAYS);
+check("a sane requested planDays is honoured", resolvePlanDays({ planDays: 90 }) === 90);
+check("a planDays beyond the cap is clamped, not honoured verbatim", resolvePlanDays({ planDays: 10_000 }) === MAX_PLAN_DAYS);
+check("a zero/negative planDays falls back to the default rather than granting nothing or negative time", resolvePlanDays({ planDays: 0 }) === DEFAULT_PLAN_DAYS && resolvePlanDays({ planDays: -5 }) === DEFAULT_PLAN_DAYS);
+
+const now = new Date("2026-10-12T00:00:00.000Z");
+const extendedFromNow = extendPaidUntil(null, 30, now);
+check("extending from no prior paid_until starts counting from now", extendedFromNow === new Date(now.getTime() + 30 * 86_400_000).toISOString());
+const stillActivePaidUntil = new Date(now.getTime() + 10 * 86_400_000).toISOString();
+const extendedFromActive = extendPaidUntil(stillActivePaidUntil, 30, now);
+check(
+  "renewing before expiry EXTENDS from the current paid_until, not from now (no wasted remaining time)",
+  extendedFromActive === new Date(new Date(stillActivePaidUntil).getTime() + 30 * 86_400_000).toISOString()
+);
+const expiredPaidUntil = new Date(now.getTime() - 5 * 86_400_000).toISOString();
+const extendedFromExpired = extendPaidUntil(expiredPaidUntil, 30, now);
+check("renewing AFTER expiry starts counting from now, not from the stale past date", extendedFromExpired === new Date(now.getTime() + 30 * 86_400_000).toISOString());
+
+check("isPaid is true for a future paid_until", isPaid(new Date(now.getTime() + 1000).toISOString(), now) === true);
+check("isPaid is false for a past paid_until", isPaid(new Date(now.getTime() - 1000).toISOString(), now) === false);
+check("isPaid is false for null/undefined — never paid by default", isPaid(null, now) === false && isPaid(undefined, now) === false);
+check("the client-side copy of isPaid (billing.ts) agrees with the server-side one — no drift", clientIsPaid(new Date(now.getTime() + 1000).toISOString(), now) === true && clientIsPaid(null, now) === false);
+
+console.log("\nPhone normalisation for WhatsApp account linking (Phase 8 §1c)");
+console.log("---------------------------------------------------------------------");
+check("a WhatsApp-style digits-only international number passes through unchanged", normalizePhone("2348012345678") === "2348012345678");
+check("a local Nigerian number with a leading 0 gets the 234 country code substituted in", normalizePhone("08012345678") === "2348012345678");
+check("a typed +234 number with spaces/dashes normalises to the same digits-only form", normalizePhone("+234 801 234 5678") === "2348012345678");
+check("a bare 10-digit number with no leading 0 still gets the country code prefixed", normalizePhone("8012345678") === "2348012345678");
+check("the client-side copy (src/lib/phoneNormalize.ts) agrees with the server-side one — no drift", clientNormalizePhone("08012345678") === normalizePhone("08012345678"));
+
+console.log("\nWhatsApp webhook: handshake + inbound message parsing (Phase 8 §1c)");
+console.log("---------------------------------------------------------------------------");
+check("a correct subscribe handshake returns the challenge token", verifyHandshake("subscribe", "my-verify-token", "my-verify-token") === "my-verify-token");
+check("a handshake with the wrong token is rejected", verifyHandshake("subscribe", "wrong-token", "my-verify-token") === null);
+check("a handshake with the wrong mode is rejected even with the right token", verifyHandshake("unsubscribe", "my-verify-token", "my-verify-token") === null);
+
+const realWhatsAppPayload = {
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            messages: [{ id: "wamid.abc123", from: "2348012345678", type: "text", text: { body: "Explain simultaneous equations" } }],
+          },
+        },
+      ],
+    },
+  ],
+};
+const parsedInbound = parseInboundMessage(realWhatsAppPayload);
+check("a real-shaped inbound text message payload parses to from/text/messageId", parsedInbound?.from === "2348012345678" && parsedInbound?.text === "Explain simultaneous equations" && parsedInbound?.messageId === "wamid.abc123");
+check("a status-callback payload (no messages array) parses to null, not a crash", parseInboundMessage({ entry: [{ changes: [{ value: { statuses: [{ status: "delivered" }] } }] }] }) === null);
+check("a non-text message (e.g. an image) parses to null — this phase only handles text", parseInboundMessage({ entry: [{ changes: [{ value: { messages: [{ id: "x", from: "234...", type: "image" }] } }] }] }) === null);
+check("a malformed/unrelated payload parses to null rather than throwing", parseInboundMessage({ random: "data" }) === null);
+check("a non-object payload parses to null rather than throwing", parseInboundMessage("just a string") === null && parseInboundMessage(null) === null);
+
+check("'assignments' is recognised as an assignment-status request", isAssignmentStatusRequest("assignments") === true);
+check("the recognition is case/whitespace-insensitive", isAssignmentStatusRequest("  Status  ") === true);
+check("an ordinary tutor question is NOT treated as a status command", isAssignmentStatusRequest("Explain simultaneous equations") === false);
+
+console.log("\nWhatsApp tutor context resolution — the §3 test #4 course-awareness requirement, made concrete");
+console.log("---------------------------------------------------------------------------------------------------");
+check("no preferences at all (no linked account's prefs ever synced) falls back to senior-secondary, never crashes", resolveWhatsAppTutorContext(null).level === "senior-secondary");
+check(
+  "a university student's FIRST added course is used — there is no switcher on WhatsApp, same 'defaults to the first added' rule TutorPage's own switcher documents",
+  resolveWhatsAppTutorContext({
+    educationLevel: "university",
+    universityProfile: { courses: [{ name: "Introduction to Algorithms and Data Structures" }, { name: "Financial Accounting I" }] },
+  }).courseName === "Introduction to Algorithms and Data Structures"
+);
+check(
+  "a secondary-level student never carries a courseName — university-only framing stays university-only",
+  resolveWhatsAppTutorContext({ educationLevel: "senior-secondary" }).courseName === undefined
+);
+check(
+  "a university student with zero courses yet gets no courseName either, rather than crashing on an empty array",
+  resolveWhatsAppTutorContext({ educationLevel: "university", universityProfile: { courses: [] } }).courseName === undefined
+);
+
+console.log("\nai-proxy caller identity verification (Phase 8 §1a)");
+console.log("------------------------------------------------------");
+check("the demo account's fixed id never needs a verified token", identityMatches(PROXY_DEMO_STUDENT_ID, null) === true);
+check("a real claimed studentId backed by a token verifying as that SAME user is accepted", identityMatches("22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222222") === true);
+check("a real claimed studentId with NO verified token is rejected — closing the Phase 4 design's open spoofing gap", identityMatches("22222222-2222-4222-8222-222222222222", null) === false);
+check(
+  "a real claimed studentId backed by a token for a DIFFERENT user is rejected — one student can no longer claim to be another",
+  identityMatches("22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333") === false
+);
+
+console.log("\nVoice input feature detection (Phase 8 §1d)");
+console.log("-----------------------------------------------");
+check("under plain Node (no window/SpeechRecognition global), voice input correctly reports as unsupported rather than crashing", isVoiceInputSupported() === false);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -29,6 +29,13 @@ export interface AppState {
   studentName: string;
   /** Call after queuing an attempt offline so the sync indicator updates immediately. */
   refreshPendingCount: () => void;
+  // Phase 8 §1b: true only once the server (via the Paystack webhook) has
+  // actually set a future paid_until — never set client-side. Always false
+  // for the demo account.
+  isPaidAccount: boolean;
+  paidUntil: string | null;
+  /** Re-fetch paid_until — call after returning from a checkout attempt. */
+  refreshBilling: () => void;
 }
 
 export const AppStateCtx = createContext<AppState | null>(null);

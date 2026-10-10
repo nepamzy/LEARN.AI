@@ -4,7 +4,7 @@
 // barely had to change — see MasteryMapSection, TopicDetailPage,
 // RevisionQueuePage, PracticeSessionPage, ExamSimulatorSessionPage.
 
-import { supabase, DEMO_STUDENT_ID, LIVE_SUBJECT_IDS } from "../supabase";
+import { supabase, getCurrentStudentId, LIVE_SUBJECT_IDS } from "../supabase";
 import { applyAttempt, type MasteryRow } from "../engine/mastery";
 import { getTopic } from "../mockData";
 import type { MasteryRecord, MistakeType, Question, RevisionItem } from "../types";
@@ -95,7 +95,7 @@ export async function fetchLiveMasteryForSubject(subjectId: string): Promise<Mas
   const { data: masteryRows, error: masteryError } = await supabase
     .from("mastery_records")
     .select("*")
-    .eq("student_id", DEMO_STUDENT_ID)
+    .eq("student_id", getCurrentStudentId())
     .in(
       "topic_id",
       (topicRows ?? []).map((t) => t.id)
@@ -122,7 +122,7 @@ export async function fetchLiveMasteryForTopic(topicId: string): Promise<Mastery
   const { data, error } = await supabase
     .from("mastery_records")
     .select("*")
-    .eq("student_id", DEMO_STUDENT_ID)
+    .eq("student_id", getCurrentStudentId())
     .eq("topic_id", topicId)
     .maybeSingle();
   if (error) throw error;
@@ -141,7 +141,7 @@ export async function fetchLiveRevisionQueue(today: string): Promise<RevisionIte
   const { data, error } = await supabase
     .from("mastery_records")
     .select("*")
-    .eq("student_id", DEMO_STUDENT_ID)
+    .eq("student_id", getCurrentStudentId())
     .lte("next_review_due", today)
     .not("next_review_due", "is", null)
     .order("next_review_due", { ascending: true });
@@ -204,10 +204,10 @@ async function runAttemptOrchestration(
     supabase
       .from("practice_attempts")
       .select("is_correct, created_at")
-      .eq("student_id", DEMO_STUDENT_ID)
+      .eq("student_id", getCurrentStudentId())
       .eq("topic_id", topicId)
       .order("created_at", { ascending: false }),
-    supabase.from("mastery_records").select("*").eq("student_id", DEMO_STUDENT_ID).eq("topic_id", topicId).maybeSingle(),
+    supabase.from("mastery_records").select("*").eq("student_id", getCurrentStudentId()).eq("topic_id", topicId).maybeSingle(),
   ]);
   if (priorError) throw priorError;
   if (currentError) throw currentError;
@@ -245,7 +245,7 @@ async function runAttemptOrchestration(
   });
 
   const { error: insertError } = await supabase.from("practice_attempts").insert({
-    student_id: DEMO_STUDENT_ID,
+    student_id: getCurrentStudentId(),
     question_id: questionId,
     topic_id: topicId,
     selected_option_id: selectedOptionId ?? null,
@@ -258,7 +258,7 @@ async function runAttemptOrchestration(
   if (insertError) throw insertError;
 
   const { error: upsertError } = await supabase.from("mastery_records").upsert({
-    student_id: DEMO_STUDENT_ID,
+    student_id: getCurrentStudentId(),
     topic_id: topicId,
     mastery_probability: nextRow.masteryProbability,
     status: nextRow.status,
@@ -300,7 +300,7 @@ export async function submitLiveAttempt(params: SubmitAttemptParams): Promise<Su
   } catch {
     const queued: QueuedAttempt = {
       localId: crypto.randomUUID(),
-      studentId: DEMO_STUDENT_ID,
+      studentId: getCurrentStudentId(),
       questionId: question.id,
       topicId: question.topicId,
       subjectId: question.subjectId,

@@ -1,4 +1,4 @@
-import { supabase, DEMO_STUDENT_ID } from "../supabase";
+import { supabase, getCurrentStudentId } from "../supabase";
 import {
   assignmentToRow,
   rowToAssignment,
@@ -11,7 +11,7 @@ import {
 export async function saveUniversityAssignment(assignment: PersistedUniversityAssignment): Promise<void> {
   const { error } = await supabase
     .from("university_assignments")
-    .upsert(assignmentToRow(assignment, DEMO_STUDENT_ID), { onConflict: "id", ignoreDuplicates: true });
+    .upsert(assignmentToRow(assignment, getCurrentStudentId()), { onConflict: "id", ignoreDuplicates: true });
   if (error) throw error;
 }
 
@@ -22,7 +22,7 @@ export async function fetchLatestUniversityAssignment(courseName: string): Promi
   const { data, error } = await supabase
     .from("university_assignments")
     .select("*")
-    .eq("student_id", DEMO_STUDENT_ID)
+    .eq("student_id", getCurrentStudentId())
     .eq("course_name", courseName)
     .order("created_at", { ascending: false })
     .limit(1);

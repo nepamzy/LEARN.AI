@@ -1,8 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppShell } from "./components/layout/AppShell";
 import { AppStateProvider } from "./state/AppStateContext";
+import { AuthProvider } from "./state/AuthContext";
 import { useAppState } from "./state/useAppState";
 import { ToastProvider } from "./components/ui/Toast";
+import { AuthGate } from "./features/auth/AuthGate";
 
 import { OnboardingFlow } from "./features/onboarding/OnboardingFlow";
 import { HomePage } from "./features/home/HomePage";
@@ -67,13 +69,17 @@ function Gate() {
 
 function App() {
   return (
-    <AppStateProvider>
-      <ToastProvider>
-        <BrowserRouter>
-          <Gate />
-        </BrowserRouter>
-      </ToastProvider>
-    </AppStateProvider>
+    <AuthProvider>
+      <AppStateProvider>
+        <ToastProvider>
+          <BrowserRouter>
+            <AuthGate>
+              <Gate />
+            </AuthGate>
+          </BrowserRouter>
+        </ToastProvider>
+      </AppStateProvider>
+    </AuthProvider>
   );
 }
 

@@ -16,10 +16,13 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { Card } from "../../components/ui/Card";
 import { useAppState } from "../../state/useAppState";
 import { useToast } from "../../components/ui/useToast";
+import { UpgradeModal } from "../billing/UpgradeModal";
+import { VoiceInputButton } from "./components/VoiceInputButton";
 
 export function TutorPage() {
-  const { sync, prefs } = useAppState();
+  const { sync, prefs, isPaidAccount } = useAppState();
   const { show } = useToast();
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>(tutorIntro);
   const [input, setInput] = useState("");
   const [tone, setTone] = useState<TutorTone>("guided");
@@ -45,7 +48,13 @@ export function TutorPage() {
   const activeCourse = resolveActiveCourse(universityCourses, activeCourseId);
 
   const isOffline = sync.status === "offline";
-  const rateLimited = messagesSentToday >= DAILY_FREE_MESSAGE_LIMIT;
+  // Phase 8 §1b: DAILY_FREE_MESSAGE_LIMIT is now a real free-tier gate, not
+  // just UX — a paid account (isPaidAccount, driven only by the server-set
+  // paid_until via the Paystack webhook) never hits it. The server-side
+  // TUTOR_DAILY_LIMIT abuse backstop in ai-proxy/index.ts is unchanged and
+  // still applies to every account, paid or not — see the Phase 8 report
+  // for why that one stays a pure anti-abuse control, not a monetisation lever.
+  const rateLimited = messagesSentToday >= DAILY_FREE_MESSAGE_LIMIT && !isPaidAccount;
 
   function scrollToBottom() {
     requestAnimationFrame(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }));
@@ -206,7 +215,7 @@ export function TutorPage() {
           icon={<AlertTriangle className="size-4 shrink-0" aria-hidden="true" />}
           className="mt-3"
           action={
-            <Button size="sm" onClick={() => show("Upgrade flow isn't wired up in this preview.", "info")}>
+            <Button size="sm" onClick={() => setUpgradeOpen(true)}>
               Upgrade
             </Button>
           }
@@ -230,6 +239,7 @@ export function TutorPage() {
           >
             <ImagePlus className="size-5" aria-hidden="true" />
           </button>
+          <VoiceInputButton onTranscript={(text) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))} />
           <label htmlFor="tutor-input" className="sr-only">
             Message Astra
           </label>
@@ -250,6 +260,7 @@ export function TutorPage() {
           </button>
         </form>
       )}
+      <UpgradeModal open={upgradeOpen} onClose={() => setUpgradeOpen(false)} />
     </div>
   );
 }

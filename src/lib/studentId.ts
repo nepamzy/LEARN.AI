@@ -4,9 +4,28 @@
 // id — not a Supabase client — and is itself imported by scripts/verify-ai.ts
 // under plain Node via tsx, where import.meta.env does not exist.
 //
-// Real multi-user auth is out of scope until a later phase — see the Phase 2
-// and Phase 4 reports.
+// Phase 8 §1a: real multi-user auth now exists (src/state/AuthContext.tsx) —
+// this id is kept as the fixed identity for the explicit "continue with the
+// demo account" path (never silently the default; see the Phase 8 report),
+// not as the only identity in the app anymore.
 export const DEMO_STUDENT_ID = "00000000-0000-4000-8000-000000000001";
+
+// The id every Supabase read/write and ai-proxy call is actually scoped to
+// right now: a real signed-in user's auth.uid() once AuthContext sets one,
+// or DEMO_STUDENT_ID otherwise. A plain module-level variable (not a React
+// context value) on purpose — src/lib/api/*.ts and proxyClient.ts are plain
+// functions, not components, and are also imported under plain Node by
+// scripts/verify-ai.ts, where a React context cannot be read. AuthContext is
+// the only thing that ever calls the setter; everything else only reads.
+let currentStudentId: string = DEMO_STUDENT_ID;
+
+export function getCurrentStudentId(): string {
+  return currentStudentId;
+}
+
+export function setCurrentStudentId(id: string): void {
+  currentStudentId = id;
+}
 
 // Subjects whose mastery/revision data is backed by the real engine.
 // Everything else (biology, chemistry, assignments, tutor) still reads
