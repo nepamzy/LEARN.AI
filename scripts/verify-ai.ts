@@ -24,6 +24,14 @@ import type { EducationLevel } from "../src/lib/types";
 import { isTutorLevel, tutorIntroForLevel } from "../supabase/functions/ai-proxy/levelFraming";
 import { SEED_COURSES } from "../src/lib/universityCourses";
 import { parseGeneratedAssignment } from "../src/lib/ai/assignmentGeneration";
+import { allowedSubjectIdsForLevel, EXAM_SUBJECTS, UNIVERSITY_NO_COURSES, UNIVERSITY_NO_STRUCTURED_CONTENT } from "../src/lib/educationLevel";
+import { availableSubjectsForLevel, universityContentGateNotice } from "../src/lib/levelContent";
+import { courseHasStructuredContent, PILOT_UNIVERSITY_SUBJECT_ID } from "../src/lib/universityPilotCourse";
+import { resolveActiveCourse } from "../src/lib/universityCourseSelection";
+import { assignmentToRow, rowToAssignment, type PersistedUniversityAssignment } from "../src/lib/ai/universityAssignmentRecord";
+import { subjects, topics } from "../src/lib/mockData";
+import { LIVE_SUBJECT_IDS } from "../src/lib/studentId";
+import type { UniversityCourse } from "../src/lib/types";
 
 let passed = 0;
 let failed = 0;
@@ -385,6 +393,98 @@ check(
     tutorIntroForLevel("junior-secondary", seededCourse.name) === introByLevel["junior-secondary"] &&
     tutorIntroForLevel("senior-secondary", seededCourse.name) === introByLevel["senior-secondary"]
 );
+
+console.log("\nLevel gating: which subjects reach each level (Phase 7c §1c)");
+console.log("-------------------------------------------------------------------");
+check(
+  "primary resolves to exactly math + english via EXAM_SUBJECTS",
+  JSON.stringify(allowedSubjectIdsForLevel("primary").sort()) === JSON.stringify(EXAM_SUBJECTS["Common Entrance"].slice().sort())
+);
+check(
+  "junior-secondary resolves to exactly math + english + biology via EXAM_SUBJECTS",
+  JSON.stringify(allowedSubjectIdsForLevel("junior-secondary").sort()) === JSON.stringify(EXAM_SUBJECTS["BECE"].slice().sort())
+);
+check(
+  "senior-secondary resolves to exactly math + english + biology + chemistry",
+  JSON.stringify(allowedSubjectIdsForLevel("senior-secondary").sort()) === JSON.stringify(["biology", "chemistry", "english", "math"])
+);
+check(
+  "Amara is completely unaffected: senior-secondary's resolved subjects are EXACTLY her own baked-in subject list",
+  JSON.stringify(allowedSubjectIdsForLevel("senior-secondary").sort()) === JSON.stringify(amara.subjects.slice().sort())
+);
+check("university has no subjects via the exam-based path (it has none of its own exams)", allowedSubjectIdsForLevel("university").length === 0);
+
+const pilotCourse: UniversityCourse = { id: "c1", name: "Introduction to Algorithms and Data Structures", customAddedByStudent: false };
+const typedPilotCourse: UniversityCourse = { id: "c2", name: "introduction to algorithms and data structures ", customAddedByStudent: true };
+const otherCourse: UniversityCourse = { id: "c3", name: "Financial Accounting I", customAddedByStudent: false };
+
+check("university with zero courses resolves to zero available subjects", availableSubjectsForLevel("university", []).length === 0);
+check("university with only a non-pilot course resolves to zero available subjects", availableSubjectsForLevel("university", [otherCourse]).length === 0);
+check(
+  "university with the pilot course resolves to exactly the one pilot subject",
+  JSON.stringify(availableSubjectsForLevel("university", [pilotCourse]).map((s) => s.id)) === JSON.stringify([PILOT_UNIVERSITY_SUBJECT_ID])
+);
+check(
+  "a hand-typed course matching the pilot's name by text (case/whitespace-insensitive) counts exactly the same as picking it from the seed list",
+  availableSubjectsForLevel("university", [typedPilotCourse]).length === 1
+);
+
+console.log("\nUniversity content gate notice (Phase 7c §1c, §7 test #4)");
+console.log("-----------------------------------------------------------------");
+check("zero courses -> the 'add a course' notice, not the 'no structured content' one", universityContentGateNotice([]) === UNIVERSITY_NO_COURSES);
+check("a course, but not the pilot -> the 'no structured content yet' notice", universityContentGateNotice([otherCourse]) === UNIVERSITY_NO_STRUCTURED_CONTENT);
+check("the pilot course present -> no gate at all (null), real content should show", universityContentGateNotice([pilotCourse]) === null);
+check("the pilot course alongside an unrelated one -> still no gate", universityContentGateNotice([otherCourse, pilotCourse]) === null);
+
+console.log("\nPilot university course wiring (Phase 7c §1d, §7 test #5)");
+console.log("-----------------------------------------------------------------");
+check("the pilot subject id is registered as a live (engine-backed) subject", (LIVE_SUBJECT_IDS as readonly string[]).includes(PILOT_UNIVERSITY_SUBJECT_ID));
+check("the pilot subject exists in the shared subjects list", subjects.some((s) => s.id === PILOT_UNIVERSITY_SUBJECT_ID));
+const pilotTopics = topics.filter((t) => t.subjectId === PILOT_UNIVERSITY_SUBJECT_ID);
+check("the pilot course has between 3 and 5 topics, per §1d's 'a handful' (not full coverage)", pilotTopics.length >= 3 && pilotTopics.length <= 5);
+check("courseHasStructuredContent matches the pilot course's exact name", courseHasStructuredContent(pilotCourse.name) === true);
+check("courseHasStructuredContent matches case/whitespace-insensitively, since a typed course must work identically to a seeded one", courseHasStructuredContent(typedPilotCourse.name) === true);
+check("courseHasStructuredContent rejects an unrelated course name", courseHasStructuredContent(otherCourse.name) === false);
+check("courseHasStructuredContent rejects an empty string rather than matching everything", courseHasStructuredContent("") === false);
+check(
+  "every OTHER seeded course has no structured content — this pilot is deliberately single-course",
+  SEED_COURSES.filter((c) => c.id !== "cs-algo").every((c) => !courseHasStructuredContent(c.name))
+);
+
+console.log("\nActive-course resolution never references a removed course (Phase 7c §1a, §7 test #1)");
+console.log("---------------------------------------------------------------------------------------------");
+const threeCourses: UniversityCourse[] = [
+  { id: "a", name: "Course A", customAddedByStudent: false },
+  { id: "b", name: "Course B", customAddedByStudent: false },
+  { id: "c", name: "Course C", customAddedByStudent: true },
+];
+check("resolves to the course matching the active id when it still exists", resolveActiveCourse(threeCourses, "b")?.id === "b");
+check(
+  "falls back to the first remaining course when the active one was removed (no stale reference, no crash)",
+  resolveActiveCourse([threeCourses[0], threeCourses[2]], "b")?.id === "a"
+);
+check("falls back correctly even when the FIRST course was the one removed", resolveActiveCourse([threeCourses[1], threeCourses[2]], "a")?.id === "b");
+check("returns undefined, not a crash, when every course has been removed", resolveActiveCourse([], "b") === undefined);
+
+console.log("\nGenerated university assignment persistence round-trip (Phase 7c §1b, §7 test #2)");
+console.log("---------------------------------------------------------------------------------------");
+const persistedAssignment: PersistedUniversityAssignment = {
+  id: "11111111-1111-4111-8111-111111111111",
+  courseName: "Introduction to Algorithms and Data Structures",
+  title: "Big-O Problem Set",
+  objective: "Practice classifying algorithms by time complexity.",
+  instructions: "Classify each of the following three algorithms and justify your answer.",
+  rubric: [
+    { id: "r1", name: "Correct classifications", maxScore: 10 },
+    { id: "r2", name: "Justification quality", maxScore: 10 },
+  ],
+  createdAt: "2026-10-10T12:00:00.000Z",
+};
+const uniStudentId = "00000000-0000-4000-8000-000000000001";
+const assignmentRow = assignmentToRow(persistedAssignment, uniStudentId);
+check("the row carries the student id it was given", assignmentRow.student_id === uniStudentId);
+check("the row maps courseName/createdAt to course_name/created_at", assignmentRow.course_name === persistedAssignment.courseName && assignmentRow.created_at === persistedAssignment.createdAt);
+check("the row round-trips back to the exact same persisted assignment (id, content, and rubric all survive)", JSON.stringify(rowToAssignment(assignmentRow)) === JSON.stringify(persistedAssignment));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

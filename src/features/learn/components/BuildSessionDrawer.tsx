@@ -3,17 +3,20 @@ import { useNavigate } from "react-router-dom";
 import { Drawer } from "../../../components/ui/Drawer";
 import { Select, TextInput } from "../../../components/ui/Input";
 import { Button } from "../../../components/ui/Button";
-import { subjects, topics } from "../../../lib/mockData";
-import { amara } from "../../../lib/mockData";
+import { topics } from "../../../lib/mockData";
+import type { Subject } from "../../../lib/types";
 
+// Phase 7c §1c: availableSubjects now comes from the caller (LearnPage),
+// scoped to the student's actual education level — this previously always
+// showed Amara's own four subjects regardless of who was asking.
 interface Props {
   open: boolean;
   onClose: () => void;
+  availableSubjects: Subject[];
 }
 
-export function BuildSessionDrawer({ open, onClose }: Props) {
+export function BuildSessionDrawer({ open, onClose, availableSubjects }: Props) {
   const navigate = useNavigate();
-  const availableSubjects = subjects.filter((s) => amara.subjects.includes(s.id));
   const [subjectId, setSubjectId] = useState(availableSubjects[0]?.id ?? "");
   const [topicId, setTopicId] = useState("any");
   const [count, setCount] = useState(10);

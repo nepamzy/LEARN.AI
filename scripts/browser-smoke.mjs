@@ -59,12 +59,99 @@ function installGradedSubmissionsFake(context) {
   return store;
 }
 
+// Phase 7c §1d: a minimal in-memory stand-in for topics/questions/
+// mastery_records/practice_attempts, scoped to whatever seed data a test
+// passes in. Only used by the one test exercising the pilot university
+// course's live practice flow — every mastery NUMBER it produces still
+// comes from the real applyAttempt()/BKT/FSRS engine running in the app
+// itself; this fake only stands in for the Supabase persistence layer,
+// same as installGradedSubmissionsFake already does elsewhere in this file.
+function installLiveEngineFake(context, { topics, questions }) {
+  const store = { masteryRows: [], attempts: [] };
+  context.route("**/rest/v1/topics**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    const url = new URL(req.url());
+    const subjectId = url.searchParams.get("subject_id")?.replace(/^eq\./, "");
+    const rows = topics.filter((t) => !subjectId || t.subject_id === subjectId);
+    return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  context.route("**/rest/v1/questions**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    const url = new URL(req.url());
+    const subjectId = url.searchParams.get("subject_id")?.replace(/^eq\./, "");
+    const topicId = url.searchParams.get("topic_id")?.replace(/^eq\./, "");
+    let rows = questions.filter((q) => (!subjectId || q.subject_id === subjectId) && (!topicId || q.topic_id === topicId));
+    if (url.searchParams.get("limit") === "1") rows = rows.slice(0, 1);
+    return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  context.route("**/rest/v1/mastery_records**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    if (req.method() === "POST") {
+      const row = JSON.parse(req.postData() ?? "{}");
+      const i = store.masteryRows.findIndex((r) => r.topic_id === row.topic_id);
+      if (i >= 0) store.masteryRows[i] = row;
+      else store.masteryRows.push(row);
+      return route.fulfill({ status: 201, headers: CORS, contentType: "application/json", body: "" });
+    }
+    const url = new URL(req.url());
+    const topicIdEq = url.searchParams.get("topic_id")?.replace(/^eq\./, "");
+    const topicIdIn = url.searchParams.get("topic_id")?.match(/^in\.\((.*)\)$/)?.[1]?.split(",");
+    let rows = store.masteryRows;
+    if (topicIdEq) rows = rows.filter((r) => r.topic_id === topicIdEq);
+    else if (topicIdIn) rows = rows.filter((r) => topicIdIn.includes(r.topic_id));
+    return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  context.route("**/rest/v1/practice_attempts**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    if (req.method() === "POST") {
+      store.attempts.push(JSON.parse(req.postData() ?? "{}"));
+      return route.fulfill({ status: 201, headers: CORS, contentType: "application/json", body: "" });
+    }
+    const url = new URL(req.url());
+    const topicId = url.searchParams.get("topic_id")?.replace(/^eq\./, "");
+    const rows = store.attempts.filter((a) => !topicId || a.topic_id === topicId);
+    return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  return store;
+}
+
+// Phase 7c §1b: in-memory stand-in for university_assignments, same pattern
+// as installGradedSubmissionsFake, so persistence survives a real page
+// reload inside a test without touching the real database.
+function installUniversityAssignmentsFake(context) {
+  const store = { rows: [] };
+  context.route("**/rest/v1/university_assignments**", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS, body: "" });
+    if (req.method() === "POST") {
+      const body = JSON.parse(req.postData() ?? "[]");
+      for (const r of Array.isArray(body) ? body : [body]) {
+        if (!store.rows.some((x) => x.id === r.id)) store.rows.push(r);
+      }
+      return route.fulfill({ status: 201, headers: CORS, contentType: "application/json", body: "" });
+    }
+    const url = new URL(req.url());
+    const courseName = url.searchParams.get("course_name")?.replace(/^eq\./, "");
+    const rows = store.rows
+      .filter((r) => !courseName || r.course_name === courseName)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 1);
+    return route.fulfill({ status: 200, headers: CORS, contentType: "application/json", body: JSON.stringify(rows) });
+  });
+  return store;
+}
+
 async function newPage(browser) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await context.addInitScript(() => {
     localStorage.setItem("astra:onboardingComplete", "true");
   });
   const store = installGradedSubmissionsFake(context);
+  const universityAssignmentsStore = installUniversityAssignmentsFake(context);
   const proxy = { calls: 0 };
   context.route("http://localhost:8787/**", (route) => {
     proxy.calls++;
@@ -73,7 +160,7 @@ async function newPage(browser) {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  return { context, page, errors, store, proxy };
+  return { context, page, errors, store, universityAssignmentsStore, proxy };
 }
 
 async function expectText(page, text, timeout = 10000) {
@@ -106,6 +193,28 @@ async function expectRole(page, role, name, timeout = 3000) {
   }
 }
 
+// Preferences (including universityProfile.courses) are persisted to
+// localStorage from a useEffect, not synchronously inside the click handler
+// that changes them — so a `page.goto` fired immediately after a course
+// add/remove can race ahead of that write and load stale prefs on the next
+// page. This waits for the actual persisted value to catch up before the
+// test navigates away, rather than guessing a fixed delay.
+async function waitForPrefsToReflect(page, substring, shouldContain, timeout = 3000) {
+  await page.waitForFunction(
+    ([text, contain]) => (localStorage.getItem("astra:prefs") ?? "").includes(text) === contain,
+    [substring, shouldContain],
+    { timeout }
+  );
+}
+
+// <option> text inside a closed <select> is present in the DOM but not
+// "visible" by Playwright's own definition, so expectText's visibility wait
+// would wrongly time out even when the option genuinely exists. This checks
+// DOM presence directly instead, for asserting what a Select does/doesn't offer.
+async function hasOption(page, text) {
+  return (await page.locator(`option:text-is("${text}")`).count()) > 0;
+}
+
 // Onboarding-specific context: deliberately does NOT set astra:onboardingComplete,
 // so OnboardingFlow actually renders instead of being skipped (Phase 7 tests).
 async function newOnboardingPage(browser) {
@@ -125,22 +234,30 @@ const DEFAULT_PREFS = { language: "en", fontSize: "default", reducedMotion: fals
 async function newPageWithLevel(browser, educationLevel, universityProfile) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const store = installGradedSubmissionsFake(context);
+  const universityAssignmentsStore = installUniversityAssignmentsFake(context);
   const proxy = { calls: 0 };
   context.route("http://localhost:8787/**", (route) => {
     proxy.calls++;
     return route.continue();
   });
+  // addInitScript re-runs before EVERY document load in this context, not
+  // just the first — including a later `page.goto` after a test has edited
+  // prefs through the UI (e.g. removing a course on Profile). Seeding
+  // unconditionally would silently revert any such edit on the next
+  // navigation, so this only seeds once, the first time astra:prefs is unset.
   await context.addInitScript(
     (prefs) => {
       localStorage.setItem("astra:onboardingComplete", "true");
-      localStorage.setItem("astra:prefs", JSON.stringify(prefs));
+      if (localStorage.getItem("astra:prefs") === null) {
+        localStorage.setItem("astra:prefs", JSON.stringify(prefs));
+      }
     },
     { ...DEFAULT_PREFS, educationLevel, ...(universityProfile ? { universityProfile } : {}) }
   );
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  return { context, page, errors, store, proxy };
+  return { context, page, errors, store, universityAssignmentsStore, proxy };
 }
 
 // Writes a pending grading job straight into the app's localStorage, as an
@@ -754,12 +871,15 @@ if (!NOT_CONFIGURED) {
   }
 }
 
-console.log("\nUniversity downstream, zero courses: defensive fallback (Phase 7b)");
-console.log("------------------------------------------------------------------------");
+console.log("\nUniversity downstream, zero courses: defensive fallback (Phase 7b, updated 7c)");
+console.log("------------------------------------------------------------------------------------");
 {
+  // Phase 7c §1a: this is no longer a purely defensive, unreachable case —
+  // Profile can now remove every course — so the copy changed from "coming
+  // soon" to an actionable "add a course" prompt (UNIVERSITY_NO_COURSES).
   const { context, page, errors } = await newPageWithLevel(browser, "university");
   await page.goto(`${APP_URL}/tutor`);
-  record("Tutor falls back to the honest notice for a courseless university account (shouldn't happen post-onboarding)", await expectText(page, "University content is coming soon"));
+  record("Tutor falls back to an actionable 'add a course' notice for a courseless university account", await expectText(page, "Add a course to get started"));
   record("no chat input is rendered in this edge case", (await page.locator("#tutor-input").count()) === 0);
   record("no uncaught page errors on the courseless University tutor page", errors.length === 0, errors.join(" | "));
   await context.close();
@@ -774,7 +894,7 @@ console.log("-------------------------------------------------------------------
 {
   const { context, page } = await newPageWithLevel(browser, "university");
   await page.goto(`${APP_URL}/assignments`);
-  record("Assignments shows the courseless fallback notice, not a broken workspace", await expectText(page, "University content is coming soon"));
+  record("Assignments shows an actionable 'add a course' notice, not a broken workspace", await expectText(page, "Add a course to get started"));
   record("no mock assignment (e.g. the JAMB/WAEC-flavoured essay) leaks through", !(await expectText(page, "JAMB/WAEC", 500)));
   await context.close();
 }
@@ -785,6 +905,197 @@ console.log("-------------------------------------------------------------------
   record("no secondary subject mastery card leaks onto the University home screen", !(await expectText(page, "Mathematics", 500)));
   await page.screenshot({ path: join(SHOTS, "university-home.png"), fullPage: true });
   record("no uncaught page errors on the University dashboard", errors.length === 0, errors.join(" | "));
+  await context.close();
+}
+
+console.log("\nCourse management on Profile; the tutor switcher never references a removed course (Phase 7c §1a, §7 test #1)");
+console.log("---------------------------------------------------------------------------------------------------------------------");
+{
+  const { context, page } = await newPageWithLevel(browser, "university", {
+    courses: [
+      { id: "c1", name: "Fluid Mechanics", code: "MEE 301", customAddedByStudent: false },
+      { id: "c2", name: "Financial Accounting I", code: "ACC 101", customAddedByStudent: false },
+    ],
+  });
+  await page.goto(`${APP_URL}/profile`);
+  record("Profile shows the 'Your courses' management card for a university student", await expectText(page, "Your courses"));
+  record(
+    "both existing courses are shown as removable chips",
+    (await expectRole(page, "button", "Remove Fluid Mechanics")) && (await expectRole(page, "button", "Remove Financial Accounting I"))
+  );
+
+  await page.fill("#profile-course-search", "Discrete Mathematics");
+  await page.getByRole("button", { name: "Add" }).click();
+  record("a newly typed course is added as a removable chip on Profile, same as any other", await expectRole(page, "button", "Remove Discrete Mathematics", 2000));
+  await waitForPrefsToReflect(page, "Discrete Mathematics", true);
+
+  // Remove the course the tutor would otherwise default to as "active" (the first one added).
+  await page.getByRole("button", { name: "Remove Fluid Mechanics" }).click();
+  record("the removed course's chip disappears from Profile", !(await expectRole(page, "button", "Remove Fluid Mechanics", 1000)));
+  await waitForPrefsToReflect(page, "Fluid Mechanics", false);
+
+  await page.goto(`${APP_URL}/tutor`);
+  record("Tutor still works after its active course was removed — no crash, no blank page", (await page.locator("#tutor-input").count()) === 1);
+  record(
+    "Tutor's banner now names one of the REMAINING courses, never the removed one",
+    (await expectText(page, "Tutoring for Financial Accounting I.", 2000)) || (await expectText(page, "Tutoring for Discrete Mathematics.", 500))
+  );
+  record("the removed course's name never appears on the tutor page", !(await expectText(page, "Fluid Mechanics", 500)));
+
+  // Remove every remaining course.
+  await page.goto(`${APP_URL}/profile`);
+  await page.getByRole("button", { name: "Remove Financial Accounting I" }).click();
+  await waitForPrefsToReflect(page, "Financial Accounting I", false);
+  await page.getByRole("button", { name: "Remove Discrete Mathematics" }).click();
+  await waitForPrefsToReflect(page, "Discrete Mathematics", false);
+  await page.goto(`${APP_URL}/tutor`);
+  record("with every course removed, Tutor falls back to the 'add a course' prompt, not a crash", await expectText(page, "Add a course to get started"));
+  await context.close();
+}
+
+if (!NOT_CONFIGURED) {
+  console.log("\nGenerated university assignment survives a reload: id, content, and grade all persist (Phase 7c §1b, §7 test #2)");
+  console.log("---------------------------------------------------------------------------------------------------------------------");
+  {
+    const { context, page, errors, universityAssignmentsStore, store } = await newPageWithLevel(browser, "university", {
+      courses: [{ id: "c1", name: "Fluid Mechanics", code: "MEE 301", customAddedByStudent: false }],
+    });
+    await page.goto(`${APP_URL}/assignments`);
+    await page.getByRole("button", { name: /Generate assignment/ }).click();
+    record("a freshly generated assignment appears", await expectText(page, "Fluid Mechanics", 8000));
+    record(
+      "the generated assignment was persisted with a real (non-mock) id",
+      universityAssignmentsStore.rows.length === 1 && typeof universityAssignmentsStore.rows[0].id === "string" && universityAssignmentsStore.rows[0].id.length > 10
+    );
+    const assignmentTitle = (await page.locator("h3").first().textContent())?.trim();
+
+    await page.getByLabel("Your response").fill("Applying Bernoulli's principle, the fluid speeds up where the pipe narrows.");
+    await page.getByRole("button", { name: "Submit for grading" }).click();
+    record("the submission is graded through the existing grading pipeline", await expectText(page, "AI practice feedback", 8000));
+    record(
+      "the grade was persisted through the SAME graded_submissions pipeline secondary assignments use, keyed to the persisted assignment's real id",
+      store.rows.length === 1 && store.rows[0].assignment_id === universityAssignmentsStore.rows[0].id
+    );
+
+    await page.reload();
+    record("after a reload, the SAME assignment content reappears, not a freshly regenerated one", await expectText(page, assignmentTitle ?? "Fluid Mechanics"));
+    record("after a reload, the persisted grade reappears without re-grading", await expectText(page, "AI practice feedback", 5000));
+    record("exactly one assignment and one grade are stored — the reload created no duplicates", universityAssignmentsStore.rows.length === 1 && store.rows.length === 1);
+    record("no uncaught page errors across generate -> submit -> reload", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+}
+
+console.log("\nPrimary/Junior/Senior Secondary: Practice/Progress/Revision/Learn show only level-appropriate subjects (Phase 7c §1c, §7 test #3)");
+console.log("---------------------------------------------------------------------------------------------------------------------------------------");
+{
+  const { context, page } = await newPageWithLevel(browser, "primary");
+  await page.goto(`${APP_URL}/practice`);
+  record("Primary's practice setup offers Mathematics", await hasOption(page, "Mathematics"));
+  record("Primary's practice setup offers English Language", await hasOption(page, "English Language"));
+  record("Primary's practice setup never offers Biology", !(await hasOption(page, "Biology")));
+  record("Primary's practice setup never offers Chemistry", !(await hasOption(page, "Chemistry")));
+  await page.goto(`${APP_URL}/progress`);
+  record("Primary's progress page offers only its own 2 subjects in the filter", (await hasOption(page, "Mathematics")) && (await hasOption(page, "English Language")) && !(await hasOption(page, "Biology")));
+  record("Primary's progress page shows no Biology mastery map section", !(await expectText(page, "Biology", 500)));
+  await page.goto(`${APP_URL}/revision`);
+  record("Primary's revision page shows no Chemistry item (Stoichiometry)", !(await expectText(page, "Stoichiometry", 500)));
+  await page.goto(`${APP_URL}/learn`);
+  record("Primary's learn page shows no Chemistry task (Stoichiometry)", !(await expectText(page, "Stoichiometry", 500)));
+  await context.close();
+}
+{
+  const { context, page } = await newPageWithLevel(browser, "junior-secondary");
+  await page.goto(`${APP_URL}/practice`);
+  record("Junior Secondary's practice setup offers Biology", await hasOption(page, "Biology"));
+  record("Junior Secondary's practice setup never offers Chemistry", !(await hasOption(page, "Chemistry")));
+  await context.close();
+}
+
+console.log("\nUniversity course WITHOUT seeded content: honest fallback on all four pages (Phase 7c §1c, §7 test #4)");
+console.log("-------------------------------------------------------------------------------------------------------------");
+{
+  const nonPilotCourse = { id: "c1", name: "Fluid Mechanics", code: "MEE 301", customAddedByStudent: false };
+  for (const path of ["practice", "progress", "revision", "learn"]) {
+    const { context, page, errors } = await newPageWithLevel(browser, "university", { courses: [nonPilotCourse] });
+    await page.goto(`${APP_URL}/${path}`);
+    record(`${path}: a university student with a non-pilot course gets an honest notice, not a crash`, (await expectText(page, "No structured practice for your courses yet")) || (await expectText(page, "Daily planning isn't built for university yet")));
+    record(`${path}: no secondary content (e.g. Mathematics) leaks through`, !(await expectText(page, "Mathematics", 500)));
+    record(`${path}: no uncaught page errors`, errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+}
+
+console.log("\nThe one seeded university course: real practice questions and mastery through the actual engine, not mocked (Phase 7c §1d, §7 test #5)");
+console.log("-------------------------------------------------------------------------------------------------------------------------------------------");
+{
+  const pilotCourseForTest = { id: "c1", name: "Introduction to Algorithms and Data Structures", code: "CSC 201", customAddedByStudent: false };
+  const PILOT_TOPIC = "uni-cs-algo-bigo";
+  const pilotTopicsFixture = [{ id: PILOT_TOPIC, subject_id: "uni-cs-algo" }];
+  const pilotQuestionsFixture = [
+    {
+      id: "uq-test-1",
+      subject_id: "uni-cs-algo",
+      topic_id: PILOT_TOPIC,
+      type: "mcq",
+      prompt: "What is the time complexity of binary search on a sorted array of n elements?",
+      options: [
+        { id: "a", label: "O(n)" },
+        { id: "b", label: "O(log n)" },
+        { id: "c", label: "O(n log n)" },
+        { id: "d", label: "O(1)" },
+      ],
+      correct_option_id: "b",
+      difficulty: 2,
+      explanation: "Binary search halves the search space each step.",
+      why_wrong_by_option: { a: "That is linear search's complexity.", c: "That is a sorting complexity, not searching.", d: "Too fast for anything but a direct index lookup." },
+      worked_example: null,
+    },
+    {
+      id: "uq-test-2",
+      subject_id: "uni-cs-algo",
+      topic_id: PILOT_TOPIC,
+      type: "mcq",
+      prompt: "Which notation describes the worst-case upper bound of an algorithm's running time?",
+      options: [
+        { id: "a", label: "Big-O" },
+        { id: "b", label: "Big-Omega" },
+        { id: "c", label: "Big-Theta" },
+        { id: "d", label: "Little-o" },
+      ],
+      correct_option_id: "a",
+      difficulty: 2,
+      explanation: "Big-O describes an upper bound.",
+      why_wrong_by_option: { b: "That is a lower bound.", c: "That is a tight bound, a stronger claim.", d: "A more specialised, less common notation." },
+      worked_example: null,
+    },
+  ];
+
+  const { context, page, errors } = await newPageWithLevel(browser, "university", { courses: [pilotCourseForTest] });
+  installLiveEngineFake(context, { topics: pilotTopicsFixture, questions: pilotQuestionsFixture });
+
+  await page.goto(`${APP_URL}/practice`);
+  record("the pilot course is offered on Practice setup — no 'no structured content' gate for it", await hasOption(page, "Introduction to Algorithms and Data Structures"));
+  await page.getByRole("button", { name: "Start practice" }).click();
+  record("a real practice session starts with one of the pilot course's seeded questions", (await expectText(page, "binary search", 5000)) || (await expectText(page, "worst-case upper bound", 2000)));
+
+  // Answer whichever seeded question came up first, correctly, then the second.
+  // submitAnswer() awaits an async call to the (faked) live engine before the
+  // feedback sheet/Next button appear, so this waits for that to actually
+  // happen rather than checking immediately after the click resolves.
+  for (let i = 0; i < 2; i++) {
+    const correctLabel = (await expectText(page, "binary search", 1000)) ? "O(log n)" : "Big-O";
+    await page.getByRole("radio", { name: correctLabel, exact: true }).click();
+    await page.getByRole("button", { name: /Submit answer|Submit & finish/ }).click();
+    const nextButton = page.getByRole("button", { name: "Next question" });
+    await nextButton.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    if (await nextButton.isVisible().catch(() => false)) await nextButton.click();
+  }
+  record("no uncaught page errors completing the pilot-course practice session", errors.length === 0, errors.join(" | "));
+
+  await page.goto(`${APP_URL}/progress/topic/${PILOT_TOPIC}`);
+  record("the topic detail page shows REAL tracked mastery for the pilot topic, not 'no data yet'", !(await expectText(page, "No data yet for this topic", 1000)));
+  record("the real engine recorded both attempts against this topic (questionsAttempted = 2)", await expectText(page, "2", 2000) && (await expectText(page, "Questions attempted")));
   await context.close();
 }
 
@@ -828,6 +1139,17 @@ console.log("-------------------------------------------------------------------
   await page.goto(`${APP_URL}/tutor`);
   record("Amara's tutor banner is the unchanged generic guidance text, not a university course banner", await expectText(page, "This explanation is study guidance."));
   record("no course selector is rendered for Amara (she has no courses, and isn't university-level)", !(await expectText(page, "Active course", 500)));
+  // Phase 7c §1c: Amara's own four subjects (via allowedSubjectIdsForLevel
+  // for senior-secondary) are byte-identical to her pre-existing
+  // amara.subjects list — these four pages must look exactly as before.
+  await page.goto(`${APP_URL}/practice`);
+  record("Amara's practice setup still offers all four of her subjects", (await hasOption(page, "Mathematics")) && (await hasOption(page, "Biology")) && (await hasOption(page, "Chemistry")));
+  await page.goto(`${APP_URL}/progress`);
+  record("Amara's progress page is unaffected by the new level-gating", (await hasOption(page, "Chemistry")) && !(await expectText(page, "No structured", 500)));
+  await page.goto(`${APP_URL}/revision`);
+  record("Amara's revision page still shows her existing content, not a gate", !(await expectText(page, "Daily planning isn't built", 500)));
+  await page.goto(`${APP_URL}/learn`);
+  record("Amara's learn page still shows her existing plan, not a gate", !(await expectText(page, "Daily planning isn't built", 500)));
   record("no uncaught page errors confirming the demo student is unchanged", errors.length === 0, errors.join(" | "));
   await context.close();
 }

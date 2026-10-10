@@ -11,7 +11,11 @@ export const DEMO_STUDENT_ID = "00000000-0000-4000-8000-000000000001";
 // Subjects whose mastery/revision data is backed by the real engine.
 // Everything else (biology, chemistry, assignments, tutor) still reads
 // src/lib/mockData.ts untouched.
-export const LIVE_SUBJECT_IDS = ["math", "english"] as const;
+// Phase 7c §1d: "uni-cs-algo" is the one pilot university course wired into
+// the same live engine — proof the architecture extends past secondary
+// subjects, not a claim of broader university coverage (see the Phase 7c
+// report). Every other university course has no entry here.
+export const LIVE_SUBJECT_IDS = ["math", "english", "uni-cs-algo"] as const;
 export type LiveSubjectId = (typeof LIVE_SUBJECT_IDS)[number];
 
 export function isLiveSubject(subjectId: string): subjectId is LiveSubjectId {

@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ClipboardCheck, GraduationCap } from "lucide-react";
 import { assignments, amara } from "../../lib/mockData";
-import { effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
+import { effectiveEducationLevel, UNIVERSITY_NO_COURSES } from "../../lib/educationLevel";
 import { Tabs } from "../../components/ui/Tabs";
 import { AssignmentCard } from "../../components/domain/AssignmentCard";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -32,14 +33,24 @@ export function AssignmentsPage() {
   const universityCourses = prefs.universityProfile?.courses ?? [];
 
   // Phase 7b: University now gets a real, AI-generated-per-request assignment
-  // flow (§6) — only a genuinely course-less university account (shouldn't
-  // happen post-onboarding, same defensive case as TutorPage) falls back to
-  // the honest notice instead of a workspace with nothing to scope to.
+  // flow (§6) — a genuinely course-less university account falls back to a
+  // notice instead of a workspace with nothing to scope to. Phase 7c §1a:
+  // this is reachable now (Profile can remove every course), so it's an
+  // actionable prompt back to Profile, not "coming soon".
   if (level === "university") {
     if (universityCourses.length === 0) {
       return (
         <Card>
-          <EmptyState icon={<GraduationCap className="size-6" aria-hidden="true" />} title={UNIVERSITY_COMING_SOON.title} description={UNIVERSITY_COMING_SOON.description} />
+          <EmptyState
+            icon={<GraduationCap className="size-6" aria-hidden="true" />}
+            title={UNIVERSITY_NO_COURSES.title}
+            description={UNIVERSITY_NO_COURSES.description}
+            action={
+              <Link to="/profile" className="text-sm font-semibold text-sage hover:underline">
+                Go to Profile
+              </Link>
+            }
+          />
         </Card>
       );
     }

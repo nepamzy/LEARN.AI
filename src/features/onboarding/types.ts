@@ -1,4 +1,9 @@
 import type { EducationLevel, ExamType, StudyGoalPace, Language, FontSize, UniversityCourse } from "../../lib/types";
+// Phase 7c: moved to lib/educationLevel.ts so Practice/Progress/Revision/
+// Learn's level gating (§1c) can reuse the exact same mapping — re-exported
+// here so this file's existing imports (OnboardingFlow, SubjectsStep) don't
+// need to change.
+export { EXAM_SUBJECTS } from "../../lib/educationLevel";
 
 export interface OnboardingData {
   educationLevel: EducationLevel | null;
@@ -42,13 +47,4 @@ export const defaultOnboardingData: OnboardingData = {
   notificationsChoice: null,
   isUnderage: false,
   guardianEmail: "",
-};
-
-export const EXAM_SUBJECTS: Record<string, string[]> = {
-  JAMB: ["math", "english", "biology", "chemistry"],
-  WAEC: ["math", "english", "biology", "chemistry"],
-  NECO: ["math", "english", "biology", "chemistry"],
-  "Post-UTME": ["math", "english", "biology", "chemistry"],
-  BECE: ["math", "english", "biology"],
-  "Common Entrance": ["math", "english"],
 };

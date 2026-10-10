@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { CheckCircle2, Layers, HelpCircle, Calculator, FileText, StopCircle } from "lucide-react";
-import { revisionQueue, getSubject, sampleQuestions } from "../../lib/mockData";
+import { useNavigate, Link } from "react-router-dom";
+import { CheckCircle2, Layers, HelpCircle, Calculator, FileText, StopCircle, GraduationCap } from "lucide-react";
+import { revisionQueue, getSubject, sampleQuestions, amara } from "../../lib/mockData";
 import { isLiveSubject } from "../../lib/supabase";
 import { fetchLiveRevisionQueue, fetchLiveQuestionForTopic } from "../../lib/api/liveData";
 import { todayISODate } from "../../lib/dates";
+import { effectiveEducationLevel } from "../../lib/educationLevel";
+import { availableSubjectsForLevel, universityContentGateNotice } from "../../lib/levelContent";
 import type { Question, RevisionItem } from "../../lib/types";
 import { Card } from "../../components/ui/Card";
 import { Button } from "../../components/ui/Button";
-import { minutesToLabel } from "../../lib/utils";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { minutesToLabel } from "../../lib/utils";
 import { ListSkeleton } from "../../components/ui/Skeleton";
+import { useAppState } from "../../state/useAppState";
 
 const modeConfig: Record<RevisionItem["mode"], { icon: typeof Layers; label: string }> = {
   flashcard: { icon: Layers, label: "Flashcards" },
@@ -21,24 +24,62 @@ const modeConfig: Record<RevisionItem["mode"], { icon: typeof Layers; label: str
 
 export function RevisionQueuePage() {
   const navigate = useNavigate();
+  const { prefs } = useAppState();
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+  const universityCourses = prefs.universityProfile?.courses ?? [];
+  // Phase 7c §1c: scoped to this level's own subjects — this matters doubly
+  // here, since fetchLiveRevisionQueue has no subject filter of its own
+  // (mastery_records is keyed only by student+topic): without this, a
+  // university student would see Math/English revision items leak in
+  // alongside (or instead of) their own course.
+  const availableSubjects = availableSubjectsForLevel(level, universityCourses);
+  const gateNotice = level === "university" ? universityContentGateNotice(universityCourses) : null;
+
   const [queue, setQueue] = useState<RevisionItem[] | null>(null);
   const [index, setIndex] = useState<number | null>(null);
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const [flipped, setFlipped] = useState(false);
 
   useEffect(() => {
+    if (gateNotice) {
+      setQueue([]);
+      return;
+    }
     let cancelled = false;
+    const allowedIds = new Set(availableSubjects.map((s) => s.id));
+    // University never mixes in the secondary mock queue (revisionQueue) —
+    // only its own live pilot-course items, if any.
+    const mockItems = level === "university" ? [] : revisionQueue.filter((item) => allowedIds.has(item.subjectId));
     fetchLiveRevisionQueue(todayISODate())
       .then((liveItems) => {
         if (cancelled) return;
-        const combined = [...liveItems, ...revisionQueue].map((item, i) => ({ ...item, urgencyRank: i + 1 }));
+        const filteredLive = liveItems.filter((item) => allowedIds.has(item.subjectId));
+        const combined = [...filteredLive, ...mockItems].map((item, i) => ({ ...item, urgencyRank: i + 1 }));
         setQueue(combined);
       })
-      .catch(() => !cancelled && setQueue(revisionQueue));
+      .catch(() => !cancelled && setQueue(mockItems));
     return () => {
       cancelled = true;
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [level, gateNotice]);
+
+  if (gateNotice) {
+    return (
+      <Card>
+        <EmptyState
+          icon={<GraduationCap className="size-6" aria-hidden="true" />}
+          title={gateNotice.title}
+          description={gateNotice.description}
+          action={
+            <Link to="/profile" className="text-sm font-semibold text-sage hover:underline">
+              Go to Profile
+            </Link>
+          }
+        />
+      </Card>
+    );
+  }
 
   const totalMinutes = (queue ?? []).reduce((s, q) => s + q.estimatedMinutes, 0);
   const allDone = !!queue && queue.length > 0 && completed.size === queue.length;

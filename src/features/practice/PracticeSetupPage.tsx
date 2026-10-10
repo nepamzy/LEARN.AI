@@ -1,15 +1,25 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { PencilLine, Timer, GraduationCap } from "lucide-react";
-import { subjects, amara, topics } from "../../lib/mockData";
+import { amara, topics } from "../../lib/mockData";
+import { effectiveEducationLevel } from "../../lib/educationLevel";
+import { availableSubjectsForLevel, universityContentGateNotice } from "../../lib/levelContent";
 import { Card } from "../../components/ui/Card";
 import { Select, TextInput } from "../../components/ui/Input";
 import { Button } from "../../components/ui/Button";
+import { EmptyState } from "../../components/ui/EmptyState";
 import { cx } from "../../lib/utils";
+import { useAppState } from "../../state/useAppState";
 
 export function PracticeSetupPage() {
   const navigate = useNavigate();
-  const availableSubjects = subjects.filter((s) => amara.subjects.includes(s.id));
+  const { prefs } = useAppState();
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+  const universityCourses = prefs.universityProfile?.courses ?? [];
+  // Phase 7c §1c: scoped to this level's own subjects — previously every
+  // level saw Amara's full subject list regardless of their own choice.
+  const availableSubjects = availableSubjectsForLevel(level, universityCourses);
+  const gateNotice = level === "university" ? universityContentGateNotice(universityCourses) : null;
   const [subjectId, setSubjectId] = useState(availableSubjects[0]?.id ?? "");
   const [topicId, setTopicId] = useState("any");
   const [count, setCount] = useState(10);
@@ -20,6 +30,23 @@ export function PracticeSetupPage() {
 
   function startSession() {
     navigate("/practice/session", { state: { subjectId, mode, timed } });
+  }
+
+  if (gateNotice) {
+    return (
+      <Card>
+        <EmptyState
+          icon={<GraduationCap className="size-6" aria-hidden="true" />}
+          title={gateNotice.title}
+          description={gateNotice.description}
+          action={
+            <Link to="/profile" className="text-sm font-semibold text-sage hover:underline">
+              Go to Profile
+            </Link>
+          }
+        />
+      </Card>
+    );
   }
 
   return (

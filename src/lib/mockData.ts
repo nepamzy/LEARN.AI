@@ -44,6 +44,11 @@ export const subjects: Subject[] = [
   { id: "english", name: "English Language", color: "info" },
   { id: "biology", name: "Biology", color: "sage" },
   { id: "chemistry", name: "Chemistry", color: "amber" },
+  // Phase 7c §1d: the one pilot university course with real structured
+  // practice content (see src/lib/universityCourses.ts's "cs-algo" entry).
+  // Every other seeded or custom university course deliberately has none —
+  // see the Phase 7c report for why this one, and why not more.
+  { id: "uni-cs-algo", name: "Introduction to Algorithms and Data Structures", color: "info" },
 ];
 
 // Math/English topic *metadata* (name, subject, grouping) still lives here so
@@ -79,6 +84,15 @@ export const topics: Topic[] = [
   { id: "chem-bonding", subjectId: "chemistry", name: "Chemical Bonding" },
   { id: "chem-organic", subjectId: "chemistry", name: "Organic Chemistry" },
   { id: "chem-electro", subjectId: "chemistry", name: "Electrochemistry" },
+
+  // Phase 7c §1d pilot: topic metadata for the one seeded university course.
+  // Mastery for these, like Math/English, comes live from Supabase — see
+  // LIVE_SUBJECT_IDS below and the Phase 7c migration that seeds its questions.
+  { id: "uni-cs-algo-bigo", subjectId: "uni-cs-algo", name: "Big-O and Algorithm Complexity" },
+  { id: "uni-cs-algo-arrays", subjectId: "uni-cs-algo", name: "Arrays and Linked Lists" },
+  { id: "uni-cs-algo-sorting", subjectId: "uni-cs-algo", name: "Sorting Algorithms" },
+  { id: "uni-cs-algo-stacks-queues", subjectId: "uni-cs-algo", name: "Stacks and Queues" },
+  { id: "uni-cs-algo-recursion", subjectId: "uni-cs-algo", name: "Recursion" },
 ];
 
 // ---- Mastery ------------------------------------------------------------
@@ -266,6 +280,54 @@ export const sampleQuestions: Question[] = [
       a: "This uses a plural verb form with a singular collective noun, and the wrong tense.",
       c: "This is not a complete verb form for the sentence.",
       d: "Present continuous doesn't match \"yesterday.\"",
+    },
+  },
+  // Phase 7c §1d: a couple of offline-fallback entries for the pilot
+  // university course, same sparse per-subject pattern as everything above —
+  // real coverage for it lives in Supabase (seeded by the Phase 7c
+  // migration), fetched live exactly like Math/English. Without these, a
+  // network failure here would fall through to this array's unfiltered
+  // default and leak secondary-level questions into a university session.
+  {
+    id: "q-uni-cs-algo-1",
+    subjectId: "uni-cs-algo",
+    topicId: "uni-cs-algo-bigo",
+    type: "mcq",
+    prompt: "What is the time complexity of binary search on a sorted array of n elements?",
+    options: [
+      { id: "a", label: "O(n)" },
+      { id: "b", label: "O(log n)" },
+      { id: "c", label: "O(n log n)" },
+      { id: "d", label: "O(1)" },
+    ],
+    correctOptionId: "b",
+    difficulty: 2,
+    explanation: "Binary search halves the remaining search space at each step, so the number of steps grows with log₂(n) — giving O(log n).",
+    whyWrongByOption: {
+      a: "That's linear search's complexity, not binary search's.",
+      c: "O(n log n) is typical for comparison-based sorting, not searching a sorted array.",
+      d: "O(1) would mean the answer is found in one step regardless of array size — that's only true for a direct index lookup.",
+    },
+  },
+  {
+    id: "q-uni-cs-algo-2",
+    subjectId: "uni-cs-algo",
+    topicId: "uni-cs-algo-stacks-queues",
+    type: "mcq",
+    prompt: "Which principle governs how elements are removed from a stack?",
+    options: [
+      { id: "a", label: "FIFO — First In, First Out" },
+      { id: "b", label: "LIFO — Last In, First Out" },
+      { id: "c", label: "Random access" },
+      { id: "d", label: "Priority-based" },
+    ],
+    correctOptionId: "b",
+    difficulty: 1,
+    explanation: "A stack only ever removes the most recently added element — Last In, First Out.",
+    whyWrongByOption: {
+      a: "FIFO describes a queue, not a stack.",
+      c: "A stack restricts access to just one end — it's never random access.",
+      d: "Plain stacks have no concept of priority; that's a priority queue.",
     },
   },
 ];

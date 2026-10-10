@@ -7,10 +7,10 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { ChevronRight, GraduationCap } from "lucide-react";
 import { useAppState } from "../../state/useAppState";
 
-// Phase 7b: distinct from UNIVERSITY_COMING_SOON — tutoring and assignments
-// ARE built for university now, so that copy would be false here. There's
-// just no standardized, timed exam format (no JAMB/WAEC/NECO equivalent) for
-// an arbitrary university course to simulate, so this page genuinely has
+// Phase 7b: tutoring and assignments ARE built for university now, so a
+// generic "not built yet" notice would be false here. There's just no
+// standardized, timed exam format (no JAMB/WAEC/NECO equivalent) for an
+// arbitrary university course to simulate, so this page genuinely has
 // nothing to offer a university student, unlike Tutor/Assignments.
 const EXAM_SIMULATOR_UNIVERSITY_NOTICE = {
   title: "No exam simulator for your courses",

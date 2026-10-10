@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Send, ImagePlus, Info, WifiOff, AlertTriangle, RotateCcw, GraduationCap } from "lucide-react";
 import { tutorIntro, amara } from "../../lib/mockData";
 import type { ChatMessage } from "../../lib/types";
-import { effectiveEducationLevel, UNIVERSITY_COMING_SOON } from "../../lib/educationLevel";
+import { effectiveEducationLevel, UNIVERSITY_NO_COURSES } from "../../lib/educationLevel";
+import { resolveActiveCourse } from "../../lib/universityCourseSelection";
 import { ChatBubble } from "./components/ChatBubble";
 import { TypingIndicator } from "./components/TypingIndicator";
 import { ToneSelector } from "./components/ToneSelector";
@@ -37,7 +39,10 @@ export function TutorPage() {
   // changes which course frames the NEXT message sent — it doesn't retag
   // messages already in the thread.
   const [activeCourseId, setActiveCourseId] = useState<string | undefined>(() => universityCourses[0]?.id);
-  const activeCourse = universityCourses.find((c) => c.id === activeCourseId) ?? universityCourses[0];
+  // Phase 7c §1a: now that courses can be removed on Profile at any time,
+  // this must never resolve to a course that's been removed — see
+  // resolveActiveCourse's own unit tests for the exact guarantee.
+  const activeCourse = resolveActiveCourse(universityCourses, activeCourseId);
 
   const isOffline = sync.status === "offline";
   const rateLimited = messagesSentToday >= DAILY_FREE_MESSAGE_LIMIT;
@@ -98,17 +103,23 @@ export function TutorPage() {
     scrollToBottom();
   }
 
-  // Phase 7b: University now gets the real chat (§5) — only a genuinely
-  // course-less university account (shouldn't happen post-onboarding, since
-  // UniversityCoursesStep requires at least one, but possible via a manual
-  // prefs override) falls back to the honest notice instead of a broken chat.
+  // Phase 7b: University now gets the real chat (§5) — a genuinely
+  // course-less university account falls back to an honest notice instead of
+  // a broken chat. Phase 7c §1a: this is no longer just a defensive,
+  // unreachable case — Profile now lets a student remove every course — so
+  // the fallback is an actionable prompt back to Profile, not "coming soon".
   if (level === "university" && universityCourses.length === 0) {
     return (
       <Card>
         <EmptyState
           icon={<GraduationCap className="size-6" aria-hidden="true" />}
-          title={UNIVERSITY_COMING_SOON.title}
-          description={UNIVERSITY_COMING_SOON.description}
+          title={UNIVERSITY_NO_COURSES.title}
+          description={UNIVERSITY_NO_COURSES.description}
+          action={
+            <Link to="/profile" className="text-sm font-semibold text-sage hover:underline">
+              Go to Profile
+            </Link>
+          }
         />
       </Card>
     );

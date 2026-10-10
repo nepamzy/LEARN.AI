@@ -23,6 +23,36 @@ export function allowedExamsForLevel(level: EducationLevel): ExamType[] {
   return EDUCATION_LEVEL_EXAMS[level];
 }
 
+// Moved here from onboarding/types.ts in Phase 7c (which re-exports it for
+// its own existing imports) so Practice/Progress/Revision/Learn (§1c) can
+// filter by level through the exact same mapping ExamStep/SubjectsStep
+// already use, without a new onboarding->lib dependency.
+export const EXAM_SUBJECTS: Record<ExamType, string[]> = {
+  JAMB: ["math", "english", "biology", "chemistry"],
+  WAEC: ["math", "english", "biology", "chemistry"],
+  NECO: ["math", "english", "biology", "chemistry"],
+  "Post-UTME": ["math", "english", "biology", "chemistry"],
+  BECE: ["math", "english", "biology"],
+  "Common Entrance": ["math", "english"],
+};
+
+/**
+ * Every subject id reachable by a given education level, via the same
+ * EXAM_SUBJECTS mapping ExamStep/SubjectsStep use — unioned across every
+ * exam valid for that level (today, every level's exams map to an identical
+ * subject list, so this is equivalent to picking any one of them, but it
+ * stays correct even if a future exam for the same level covers a different
+ * subject set). University has no exams and so no subjects via this path —
+ * see §1d for its one, separately-wired pilot course.
+ */
+export function allowedSubjectIdsForLevel(level: EducationLevel): string[] {
+  const subjectIds = new Set<string>();
+  for (const exam of allowedExamsForLevel(level)) {
+    for (const id of EXAM_SUBJECTS[exam]) subjectIds.add(id);
+  }
+  return Array.from(subjectIds);
+}
+
 /** False only for university — every other level has real exam content today. */
 export function hasExamContentForLevel(level: EducationLevel): boolean {
   return allowedExamsForLevel(level).length > 0;
@@ -33,12 +63,24 @@ export function effectiveEducationLevel(onboardingChoice: EducationLevel | null,
   return onboardingChoice ?? studentLevel;
 }
 
-// One honest, reused message for every surface that has nothing real to show
-// a university-level account yet (§6 — never a silent fallback to secondary
-// content). Written once here so the wording stays identical everywhere it
-// appears, per surface only the heading context around it differs.
-export const UNIVERSITY_COMING_SOON = {
-  title: "University content is coming soon",
+// Phase 7c §1a: a university account with zero courses is no longer a
+// defensive, unreachable edge case (Profile now lets a student remove every
+// course), so Tutor/Assignments need an honest, ACTIONABLE notice here.
+// Phase 7's old "University content is coming soon" copy (used here and on
+// Practice/Progress/Revision/Learn pre-7b/7c) is retired — it was never true
+// once Tutor/Assignments shipped in 7b, and would be even less true now.
+export const UNIVERSITY_NO_COURSES = {
+  title: "Add a course to get started",
+  description: "The tutor and assignments need to know what you're studying. Add at least one course on your profile, then come back here.",
+};
+
+// Phase 7c §1c: for Practice/Progress/Revision/Learn specifically — a
+// university student who HAS courses, but none of them is the one pilot
+// course with real structured content (§1d). Distinct from
+// UNIVERSITY_NO_COURSES: the student has a course, there's just no
+// practice/mastery data for it yet, so this points at what DOES work today.
+export const UNIVERSITY_NO_STRUCTURED_CONTENT = {
+  title: "No structured practice for your courses yet",
   description:
-    "Astra Study currently supports Primary School through Senior Secondary — Common Entrance, BECE, WAEC, NECO, JAMB and Post-UTME. University-level subjects, tutoring and assignments aren't built yet, but your account is ready for when they are.",
+    "Astra doesn't have practice questions or tracked mastery for your course(s) yet — that's still a pilot for one course today. The AI Tutor and Assignments already work for any course you name.",
 };

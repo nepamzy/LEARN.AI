@@ -1,15 +1,20 @@
 import { useMemo, useState } from "react";
-import { Plus } from "lucide-react";
-import { todayPlan } from "../../lib/mockData";
+import { Link } from "react-router-dom";
+import { Plus, GraduationCap } from "lucide-react";
+import { todayPlan, amara } from "../../lib/mockData";
+import { effectiveEducationLevel } from "../../lib/educationLevel";
+import { availableSubjectsForLevel, universityContentGateNotice } from "../../lib/levelContent";
 import { WeekStrip } from "./components/WeekStrip";
 import { DailyPlanItem } from "./components/DailyPlanItem";
 import { BuildSessionDrawer } from "./components/BuildSessionDrawer";
 import { Drawer } from "../../components/ui/Drawer";
 import { Button } from "../../components/ui/Button";
+import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { CalendarCheck2 } from "lucide-react";
 import { minutesToLabel } from "../../lib/utils";
 import { getStartOfToday } from "../../lib/dates";
+import { useAppState } from "../../state/useAppState";
 import type { PlanTask } from "../../lib/types";
 
 function buildWeek(today: Date, todayTaskCount: number) {
@@ -24,16 +29,57 @@ function buildWeek(today: Date, todayTaskCount: number) {
 }
 
 export function LearnPage() {
+  const { prefs } = useAppState();
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+  const universityCourses = prefs.universityProfile?.courses ?? [];
+  // Phase 7c §1c: scoped to this level's own subjects — previously every
+  // level saw Amara's full plan unfiltered, including subjects (biology,
+  // chemistry) a Primary or Junior Secondary account never studies.
+  const availableSubjects = availableSubjectsForLevel(level, universityCourses);
+  // Daily planning (todayPlan) doesn't exist for ANY university course yet,
+  // pilot included — it's a separate, not-yet-built system, distinct from
+  // §1d's practice/mastery pilot — so university always gets an honest
+  // gate here, never an empty "nothing scheduled" that implies a working
+  // planner. coursesGate (pointing to Profile) takes priority when it's the
+  // courses themselves that are missing; otherwise it's the planner itself
+  // that doesn't exist yet (pointing to Tutor instead).
+  const coursesGate = level === "university" ? universityContentGateNotice(universityCourses) : null;
+  const gateNotice =
+    level === "university"
+      ? coursesGate ?? {
+          title: "Daily planning isn't built for university yet",
+          description: "Astra doesn't build a day-by-day study plan for university courses yet. Ask Astra about your coursework in the Tutor tab, or request a practice assignment instead.",
+        }
+      : null;
+
+  const todayTasks = todayPlan.filter((t) => availableSubjects.some((s) => s.id === t.subjectId));
   const today = useMemo(() => getStartOfToday(), []);
   const todayIndex = today.getDay();
-  const week = useMemo(() => buildWeek(today, todayPlan.length), [today]);
+  const week = useMemo(() => buildWeek(today, todayTasks.length), [today, todayTasks.length]);
   const [selectedIndex, setSelectedIndex] = useState(todayIndex);
   const [buildOpen, setBuildOpen] = useState(false);
   const [whyTask, setWhyTask] = useState<PlanTask | null>(null);
 
   const isToday = selectedIndex === todayIndex;
-  const tasks = isToday ? todayPlan : [];
+  const tasks = isToday ? todayTasks : [];
   const totalMinutes = tasks.reduce((s, t) => s + t.estimatedMinutes, 0);
+
+  if (gateNotice) {
+    return (
+      <Card>
+        <EmptyState
+          icon={<GraduationCap className="size-6" aria-hidden="true" />}
+          title={gateNotice.title}
+          description={gateNotice.description}
+          action={
+            <Link to={coursesGate ? "/profile" : "/tutor"} className="text-sm font-semibold text-sage hover:underline">
+              {coursesGate ? "Go to Profile" : "Go to Tutor"}
+            </Link>
+          }
+        />
+      </Card>
+    );
+  }
 
   return (
     <div className="pb-6 space-y-5 pt-2">
@@ -72,7 +118,7 @@ export function LearnPage() {
         </div>
       )}
 
-      <BuildSessionDrawer open={buildOpen} onClose={() => setBuildOpen(false)} />
+      <BuildSessionDrawer open={buildOpen} onClose={() => setBuildOpen(false)} availableSubjects={availableSubjects} />
 
       <Drawer open={!!whyTask} onClose={() => setWhyTask(null)} title="Why am I seeing this?">
         {whyTask && (

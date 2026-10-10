@@ -6,9 +6,12 @@ import { Switch } from "../../components/ui/Switch";
 import { Select, TextInput } from "../../components/ui/Input";
 import { Button } from "../../components/ui/Button";
 import { Modal } from "../../components/ui/Modal";
+import { CourseEditor } from "../../components/domain/CourseEditor";
 import { useAppState } from "../../state/useAppState";
 import { useToast } from "../../components/ui/useToast";
 import { loadLocal } from "../../lib/storage";
+import { amara } from "../../lib/mockData";
+import { effectiveEducationLevel } from "../../lib/educationLevel";
 
 export function ProfilePage() {
   const { prefs, setPrefs, simulateOffline, setSimulateOffline, setOnboardingComplete } = useAppState();
@@ -17,12 +20,42 @@ export function ProfilePage() {
   const [guardianInviteOpen, setGuardianInviteOpen] = useState(false);
   const [guardianEmail, setGuardianEmail] = useState("");
   const onboardingSkipped = loadLocal("onboardingSkipped", false);
+  const level = effectiveEducationLevel(prefs.educationLevel, amara.educationLevel);
+  const isUniversity = level === "university";
 
   return (
     <div className="pb-6 space-y-5 pt-2 max-w-xl">
       <h2 className="text-xl font-bold text-ink">Profile &amp; settings</h2>
 
       <ProfileHeaderCard />
+
+      {/* Phase 7c §1a: the first edit affordance on this page — add/remove
+          courses any time, not just during onboarding. `exam` (the secondary
+          equivalent) does NOT get the same treatment here: unlike
+          universityProfile, Preferences has no override field for it at all
+          yet, and editing it would also need to re-derive the subjects tied
+          to it (EXAM_SUBJECTS) — a bigger addition than this one, intentionally
+          left out of this phase. See the Phase 7c report. */}
+      {isUniversity && (
+        <Card>
+          <h3 className="font-bold text-ink text-[16px] mb-1">Your courses</h3>
+          <p className="text-sm text-ink-secondary mb-3">
+            Add or remove courses any time — the tutor and assignments update to match.
+          </p>
+          <CourseEditor
+            courses={prefs.universityProfile?.courses ?? []}
+            onChange={(courses) =>
+              setPrefs({
+                universityProfile: {
+                  ...(prefs.universityProfile ?? { courses: [] }),
+                  courses,
+                },
+              })
+            }
+            searchInputId="profile-course-search"
+          />
+        </Card>
+      )}
 
       {onboardingSkipped && (
         <Card className="bg-amber-surface border-amber/20 flex items-center gap-3">
