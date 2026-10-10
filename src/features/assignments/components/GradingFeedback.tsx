@@ -21,7 +21,10 @@ interface Props {
 
 const pendingCopy: Record<"not-configured" | "file" | "waiting", string> = {
   "not-configured": "AI feedback isn't switched on for this build yet. Your work is saved on this device and will be marked once it is.",
-  file: "Astra can't read uploaded files yet, so this submission won't get AI feedback. Typing or photographing your answer will.",
+  // Phase 7d §1b: file uploads ARE graded now — this only shows if a
+  // submission was somehow queued with no text at all, which shouldn't
+  // happen once a file's extracted text has been confirmed.
+  file: "Astra couldn't find any text for this submission, so it hasn't been marked. Your work is saved on this device — try resubmitting.",
   waiting: "Your work is saved on this device. Astra will mark it when the connection is back.",
 };
 

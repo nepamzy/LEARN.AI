@@ -44,11 +44,13 @@ export const subjects: Subject[] = [
   { id: "english", name: "English Language", color: "info" },
   { id: "biology", name: "Biology", color: "sage" },
   { id: "chemistry", name: "Chemistry", color: "amber" },
-  // Phase 7c §1d: the one pilot university course with real structured
-  // practice content (see src/lib/universityCourses.ts's "cs-algo" entry).
-  // Every other seeded or custom university course deliberately has none —
-  // see the Phase 7c report for why this one, and why not more.
+  // Phase 7c §1d / Phase 7d §1c: the two seeded university courses with real
+  // structured practice content (see src/lib/universityCourses.ts's
+  // "cs-algo" and "mth-calculus1" entries). Every other seeded or custom
+  // university course deliberately has none — see the Phase 7c/7d reports
+  // for why these two, and why not more.
   { id: "uni-cs-algo", name: "Introduction to Algorithms and Data Structures", color: "info" },
+  { id: "uni-mth-calc1", name: "Calculus I", color: "sage" },
 ];
 
 // Math/English topic *metadata* (name, subject, grouping) still lives here so
@@ -93,6 +95,15 @@ export const topics: Topic[] = [
   { id: "uni-cs-algo-sorting", subjectId: "uni-cs-algo", name: "Sorting Algorithms" },
   { id: "uni-cs-algo-stacks-queues", subjectId: "uni-cs-algo", name: "Stacks and Queues" },
   { id: "uni-cs-algo-recursion", subjectId: "uni-cs-algo", name: "Recursion" },
+
+  // Phase 7d §1c pilot: topic metadata for the second seeded university
+  // course (Faculty of Sciences). Mastery comes live from Supabase, same as
+  // uni-cs-algo — see LIVE_SUBJECT_IDS below and the Phase 7d migration.
+  { id: "uni-mth-calc1-limits", subjectId: "uni-mth-calc1", name: "Limits and Continuity" },
+  { id: "uni-mth-calc1-derivatives", subjectId: "uni-mth-calc1", name: "Derivatives and Differentiation Rules" },
+  { id: "uni-mth-calc1-applications", subjectId: "uni-mth-calc1", name: "Applications of Derivatives" },
+  { id: "uni-mth-calc1-integration", subjectId: "uni-mth-calc1", name: "Introduction to Integration" },
+  { id: "uni-mth-calc1-sequences", subjectId: "uni-mth-calc1", name: "Sequences and Series" },
 ];
 
 // ---- Mastery ------------------------------------------------------------
@@ -328,6 +339,50 @@ export const sampleQuestions: Question[] = [
       a: "FIFO describes a queue, not a stack.",
       c: "A stack restricts access to just one end — it's never random access.",
       d: "Plain stacks have no concept of priority; that's a priority queue.",
+    },
+  },
+  // Phase 7d §1c: offline-fallback entries for the second pilot university
+  // course, same reasoning as the uni-cs-algo pair above.
+  {
+    id: "q-uni-mth-calc1-1",
+    subjectId: "uni-mth-calc1",
+    topicId: "uni-mth-calc1-limits",
+    type: "mcq",
+    prompt: "What is lim(x→0) sin(x)/x?",
+    options: [
+      { id: "a", label: "0" },
+      { id: "b", label: "1" },
+      { id: "c", label: "Undefined" },
+      { id: "d", label: "Infinity" },
+    ],
+    correctOptionId: "b",
+    difficulty: 3,
+    explanation: "This is a standard limit provable via the squeeze theorem: sin(x)/x approaches 1 as x approaches 0.",
+    whyWrongByOption: {
+      a: "A common mix-up with sin(0) = 0 itself, not the limit of the ratio.",
+      c: "Though it's a 0/0 form, the limit genuinely exists — it doesn't stay undefined.",
+      d: "The function is bounded near 0, not growing without bound.",
+    },
+  },
+  {
+    id: "q-uni-mth-calc1-2",
+    subjectId: "uni-mth-calc1",
+    topicId: "uni-mth-calc1-derivatives",
+    type: "mcq",
+    prompt: "What is the derivative of f(x) = x^3?",
+    options: [
+      { id: "a", label: "x^2" },
+      { id: "b", label: "3x^2" },
+      { id: "c", label: "3x^3" },
+      { id: "d", label: "x^2 / 3" },
+    ],
+    correctOptionId: "b",
+    difficulty: 1,
+    explanation: "By the power rule, d/dx[x^n] = n·x^(n-1), so d/dx[x^3] = 3x^2.",
+    whyWrongByOption: {
+      a: "Forgot to multiply by the original exponent.",
+      c: "Forgot to reduce the exponent by one.",
+      d: "Inverts the rule — division instead of multiplication.",
     },
   },
 ];

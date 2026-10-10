@@ -4,7 +4,7 @@
 // the student's chosen education level entirely.
 import { subjects } from "./mockData";
 import { allowedSubjectIdsForLevel, UNIVERSITY_NO_COURSES, UNIVERSITY_NO_STRUCTURED_CONTENT } from "./educationLevel";
-import { PILOT_UNIVERSITY_SUBJECT_ID, courseHasStructuredContent } from "./universityPilotCourse";
+import { courseHasStructuredContent, pilotSubjectIdForCourse } from "./universityPilotCourse";
 import type { EducationLevel, Subject, UniversityCourse } from "./types";
 
 /**
@@ -12,15 +12,17 @@ import type { EducationLevel, Subject, UniversityCourse } from "./types";
  * that level (§1c) — for Senior Secondary this is exactly Amara's own
  * ["math","english","biology","chemistry"], so her experience is unchanged.
  *
- * University: just the one pilot subject (§1d), and only if one of the
- * student's named courses actually matches it by name — otherwise empty,
- * so callers show the honest "no structured content" fallback rather than
- * leaking secondary subjects or a broken empty mastery map.
+ * University: only the pilot subject(s) matching one of the student's named
+ * courses by name (§1d — now two: CSC 201 and Calculus I) — otherwise
+ * empty, so callers show the honest "no structured content" fallback rather
+ * than leaking secondary subjects or a broken empty mastery map.
  */
 export function availableSubjectsForLevel(level: EducationLevel, universityCourses: UniversityCourse[] = []): Subject[] {
   if (level === "university") {
-    const hasPilotCourse = universityCourses.some((c) => courseHasStructuredContent(c.name));
-    return hasPilotCourse ? subjects.filter((s) => s.id === PILOT_UNIVERSITY_SUBJECT_ID) : [];
+    const pilotSubjectIds = new Set(
+      universityCourses.map((c) => pilotSubjectIdForCourse(c.name)).filter((id): id is string => !!id)
+    );
+    return subjects.filter((s) => pilotSubjectIds.has(s.id));
   }
   const allowedIds = new Set(allowedSubjectIdsForLevel(level));
   return subjects.filter((s) => allowedIds.has(s.id));

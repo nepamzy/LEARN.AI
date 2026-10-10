@@ -14,6 +14,8 @@ import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { TextArea } from "../../components/ui/Input";
 import { ListSkeleton } from "../../components/ui/Skeleton";
+import { Tabs } from "../../components/ui/Tabs";
+import { SubmissionFileUpload } from "./components/SubmissionFileUpload";
 import { GradingFeedback, type GradingState } from "./components/GradingFeedback";
 
 // Phase 7b: assignments were never AI-generated before this phase — every
@@ -78,13 +80,19 @@ export function UniversityAssignmentWorkspace({ courses }: { courses: University
 // manually reset half a dozen state values inside an effect.
 function AssignmentWorkspaceForCourse({ course }: { course: UniversityCourse }) {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  // Phase 7d §1b: a second submission method, same "one pipeline, not two"
+  // requirement as secondary — an uploaded file's extracted text is
+  // submitted through the exact same gradeSubmission() call typed text is.
+  const [responseMethod, setResponseMethod] = useState("type");
   const [responseText, setResponseText] = useState("");
+  const [fileText, setFileText] = useState<string | null>(null);
   const [grading, setGrading] = useState<GradingState | null>(null);
   const [retrying, setRetrying] = useState(false);
   // Holds the one grading result awaiting a successful save, so a retry
-  // after a failed save resaves the SAME grade instead of spending another
-  // AI call — same ordering rule AssignmentDetailPage's saveGrade follows.
-  const pendingGrade = useRef<{ recordId: string; result: GradingResult } | null>(null);
+  // after a failed save resaves the SAME grade (and the same submitted
+  // text) instead of spending another AI call — same ordering rule
+  // AssignmentDetailPage's saveGrade follows.
+  const pendingGrade = useRef<{ recordId: string; result: GradingResult; submittedText: string } | null>(null);
 
   // Resume whatever this student last generated for this course (if
   // anything), and whether it was already graded — rather than always
@@ -117,7 +125,9 @@ function AssignmentWorkspaceForCourse({ course }: { course: UniversityCourse }) 
 
   async function handleGenerate() {
     setPhase({ kind: "generating" });
+    setResponseMethod("type");
     setResponseText("");
+    setFileText(null);
     setGrading(null);
     pendingGrade.current = null;
     try {
@@ -137,13 +147,13 @@ function AssignmentWorkspaceForCourse({ course }: { course: UniversityCourse }) 
 
   // Order matters, same as AssignmentDetailPage's saveGrade: the grade is
   // shown only once it's actually saved, never before.
-  async function saveGrade(assignment: PersistedUniversityAssignment, recordId: string, result: GradingResult) {
+  async function saveGrade(assignment: PersistedUniversityAssignment, recordId: string, result: GradingResult, submittedText: string) {
     try {
       await saveGradedRecord({
         id: recordId,
         assignmentId: assignment.id,
         submissionMethod: "type",
-        submittedText: responseText.trim(),
+        submittedText,
         gradedAt: new Date().toISOString(),
         result,
       });
@@ -155,17 +165,19 @@ function AssignmentWorkspaceForCourse({ course }: { course: UniversityCourse }) 
 
   async function submitForGrading() {
     if (phase.kind !== "ready") return;
+    const studentText = responseMethod === "file" ? (fileText ?? "") : responseText.trim();
+    if (!studentText) return;
     setRetrying(true);
     try {
       const result = await gradeSubmission({
         assignmentTitle: phase.assignment.title,
         objective: phase.assignment.objective,
         rubric: phase.assignment.rubric,
-        studentText: responseText.trim(),
+        studentText,
         courseName: course.name,
       });
-      pendingGrade.current = { recordId: crypto.randomUUID(), result };
-      await saveGrade(phase.assignment, pendingGrade.current.recordId, result);
+      pendingGrade.current = { recordId: crypto.randomUUID(), result, submittedText: studentText };
+      await saveGrade(phase.assignment, pendingGrade.current.recordId, result, studentText);
     } catch (err) {
       if (err instanceof AiUnavailableError) setGrading({ status: "pending", reason: "not-configured" });
       else if (err instanceof AiRateLimitError) setGrading({ status: "failed", reason: "rate-limited" });
@@ -179,7 +191,7 @@ function AssignmentWorkspaceForCourse({ course }: { course: UniversityCourse }) 
     // A failed SAVE only needs the save retried — no AI call is spent again.
     if (grading?.status === "save-failed" && pendingGrade.current && phase.kind === "ready") {
       setRetrying(true);
-      await saveGrade(phase.assignment, pendingGrade.current.recordId, pendingGrade.current.result);
+      await saveGrade(phase.assignment, pendingGrade.current.recordId, pendingGrade.current.result, pendingGrade.current.submittedText);
       setRetrying(false);
       return;
     }
@@ -246,14 +258,32 @@ function AssignmentWorkspaceForCourse({ course }: { course: UniversityCourse }) 
 
           {!grading && (
             <Card className="space-y-3">
-              <TextArea
-                label="Your response"
-                rows={8}
-                value={responseText}
-                onChange={(e) => setResponseText(e.target.value)}
-                placeholder="Write your answer here…"
+              <Tabs
+                aria-label="Submission method"
+                active={responseMethod}
+                onChange={setResponseMethod}
+                tabs={[
+                  { id: "type", label: "Type response" },
+                  { id: "file", label: "Upload file" },
+                ]}
               />
-              <Button fullWidth disabled={!responseText.trim()} loading={retrying} onClick={() => void submitForGrading()}>
+              {responseMethod === "type" ? (
+                <TextArea
+                  label="Your response"
+                  rows={8}
+                  value={responseText}
+                  onChange={(e) => setResponseText(e.target.value)}
+                  placeholder="Write your answer here…"
+                />
+              ) : (
+                <SubmissionFileUpload onConfirmed={setFileText} />
+              )}
+              <Button
+                fullWidth
+                disabled={responseMethod === "file" ? !fileText : !responseText.trim()}
+                loading={retrying}
+                onClick={() => void submitForGrading()}
+              >
                 Submit for grading
               </Button>
             </Card>

@@ -30,6 +30,10 @@ function gradingFailureState(err: unknown): GradingState {
 function initialGradingState(job: PendingGrading | undefined): GradingState | null {
   if (!job) return null;
   const action = resumeAction(job);
+  // Phase 7d §1b: a "file" job now always carries real, already-confirmed
+  // extracted text by the time it's queued (same as "photo"), so it's
+  // resumable exactly like any other method — "file-not-graded" is now
+  // only a defensive fallback for a job somehow queued with no text at all.
   if (action === "file-not-graded") return { status: "pending", reason: "file" };
   if (action === "save-only") return { status: "resuming" };
   return { status: "unfinished" };
@@ -44,7 +48,7 @@ export function AssignmentDetailPage() {
   const [recovery] = useState(() => (assignmentId ? getPendingGrading(assignmentId) : undefined));
   const [method, setMethod] = useState("type");
   const [typedText, setTypedText] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [fileText, setFileText] = useState<string | null>(null);
   const [ocrText, setOcrText] = useState<string | null>(null);
   const [submittedAt, setSubmittedAt] = useState<Date | null>(() => (recovery ? new Date(recovery.submittedAt) : null));
   const [grading, setGrading] = useState<GradingState | null>(() => initialGradingState(recovery));
@@ -70,7 +74,6 @@ export function AssignmentDetailPage() {
   }
 
   async function completeGrading(job: PendingGrading) {
-    if (job.submissionMethod === "file") return;
     setRetrying(true);
     let result: GradingResult | undefined = job.result;
     try {
@@ -109,12 +112,14 @@ export function AssignmentDetailPage() {
 
   const subject = getSubject(assignment.subjectId);
   const topic = assignment.topicId ? getTopic(assignment.topicId) : undefined;
-  const canSubmit = (method === "type" && typedText.trim().length > 0) || (method === "file" && !!file) || (method === "photo" && !!ocrText);
+  const canSubmit = (method === "type" && typedText.trim().length > 0) || (method === "file" && !!fileText) || (method === "photo" && !!ocrText);
 
   function handleSubmit() {
     const now = currentTime();
     setSubmittedAt(now);
-    const studentText = method === "type" ? typedText.trim() : method === "photo" ? (ocrText ?? "") : "";
+    // Phase 7d §1b: a confirmed file upload's extracted text goes through
+    // the exact same request shape typed/OCR'd text already does.
+    const studentText = method === "type" ? typedText.trim() : method === "photo" ? (ocrText ?? "") : (fileText ?? "");
     const job: PendingGrading = {
       assignmentId: assignment!.id,
       request: {
@@ -232,7 +237,7 @@ export function AssignmentDetailPage() {
         </div>
 
         {method === "type" && <SubmissionTypeResponse assignmentId={assignment.id} onChange={setTypedText} />}
-        {method === "file" && <SubmissionFileUpload onFileReady={setFile} />}
+        {method === "file" && <SubmissionFileUpload onConfirmed={setFileText} />}
         {method === "photo" && <SubmissionPhotoOCR onConfirmed={setOcrText} />}
       </Card>
 

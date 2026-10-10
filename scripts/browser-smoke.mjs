@@ -541,18 +541,88 @@ if (!NOT_CONFIGURED) {
     await context.close();
   }
 
-  console.log("\nRecovery after reload: file submission (Phase 6)");
+  console.log("\nFile upload: confirm-or-correct UI, then graded through the real pipeline (Phase 7d §1b)");
   {
-    const { context, page } = await newPage(browser);
+    // Phase 7d §1b: a file upload now goes through confirm-or-correct (the
+    // same shape as the photo/OCR flow) before it reaches the grading
+    // pipeline. Note: like ANY fully-graded-and-saved submission (type or
+    // photo included — see the pre-existing "Assignment grading success"
+    // test above, which never asserts survival across a reload either),
+    // AssignmentDetailPage only recovers in-progress state from
+    // pendingGrading, which is cleared once a grade is saved — so a reload
+    // AFTER a full grade-and-save is an untested, out-of-scope edge case for
+    // every method, not something Phase 7d changed or is asked to fix. The
+    // "Recovery after reload: file submission" cases below instead seed an
+    // INTERRUPTED file job directly (the realistic case), mirroring the
+    // type/photo recovery tests above exactly.
+    const { context, page, store } = await newPage(browser);
     const filePath = join(tmpdir(), "astra-test-reload.txt");
-    writeFileSync(filePath, "reload test upload");
+    writeFileSync(filePath, "This essay argues that qualitative education broadens a nation's development beyond raw economic output.");
     await page.goto(`${APP_URL}/assignments/asg-1`);
     await page.getByRole("tab", { name: "Upload file" }).click();
     await page.setInputFiles('input[aria-label="Upload assignment file"]', filePath);
+    record("the uploaded file's extracted text is shown for the student to confirm or correct", await expectText(page, "Confirm or correct the extracted text"));
+    await page.getByRole("button", { name: "Confirm this is correct" }).click();
     await page.getByRole("button", { name: "Submit assignment" }).click();
-    await page.reload();
-    record("a file submission still shows as submitted after a reload", await expectText(page, "was submitted on"));
-    record("it still says file uploads can't be marked yet, rather than vanishing", await expectText(page, "can't read uploaded files yet"));
+    record("a confirmed file upload is graded through the real pipeline, with a real score, not the old 'can't be marked yet' message", await expectText(page, "AI practice feedback", 8000));
+    record("the old 'can't read uploaded files yet' message no longer appears for a readable file", !(await expectText(page, "can't read uploaded files yet", 500)));
+    record("the grade is saved to graded_submissions, provenance-tagged as a text submission same as typed/photo", store.rows.length === 1 && store.rows[0]?.submission_method === "type");
+    await context.close();
+  }
+
+  console.log("\nRecovery after reload: an INTERRUPTED file submission resumes exactly like type/photo (Phase 6, updated Phase 7d §1b)");
+  {
+    // Mirrors "Recovery after reload: unfinished submission" above, but for
+    // submissionMethod "file" with real (already-confirmed) extracted text —
+    // proving resumeAction()'s updated logic (gradingQueue.ts) actually
+    // reaches the UI: a file job with real text awaits the student's tap
+    // exactly like type/photo, instead of the old permanent "file-not-graded".
+    const { context, page, store, proxy } = await newPage(browser);
+    await seedPendingJob(
+      page,
+      baseJob({ submissionMethod: "file", request: { ...baseJob({}).request, studentText: "Extracted file text that was confirmed before the reload interrupted submission." } })
+    );
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    record("an unfinished FILE submission is recovered after a reload, not shown as permanently unmarked", await expectText(page, "unfinished submission"));
+    record("the old permanent 'can't read uploaded files yet' message does NOT appear for a job with real text", !(await expectText(page, "can't read uploaded files yet", 500)));
+    record("recovery does not grade automatically (no AI call before the student taps)", proxy.calls === 0, `${proxy.calls} proxy call(s)`);
+    await page.getByRole("button", { name: "Resume marking" }).click();
+    record("resuming a recovered file job grades it and shows real feedback", await expectText(page, "AI practice feedback"));
+    record("resuming a file job spends exactly one AI call, same as type/photo", proxy.calls === 1, `${proxy.calls} proxy call(s)`);
+    record("the resumed file grade is written to graded_submissions", store.rows.length === 1, `${store.rows.length} row(s)`);
+    await context.close();
+  }
+
+  console.log("\nRecovery after reload: a file job queued with NO text (defensive fallback) still shows the honest unmarked state");
+  {
+    // The one remaining case resumeAction() still maps to "file-not-graded":
+    // a job somehow queued with empty text — not normally reachable since
+    // SubmissionFileUpload never calls onConfirmed with empty text, but kept
+    // as a defensive fallback so an empty job is never silently graded.
+    const { context, page, proxy } = await newPage(browser);
+    await seedPendingJob(page, baseJob({ submissionMethod: "file", request: { ...baseJob({}).request, studentText: "" } }));
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    record("a file job with genuinely no text shows the honest 'no text found' message, not a fabricated grade", await expectText(page, "couldn't find any text for this submission"));
+    record("no AI call is spent on a job with no text to grade", proxy.calls === 0, `${proxy.calls} proxy call(s)`);
+    await context.close();
+  }
+
+  console.log("\nFile upload that can't be reliably extracted fails honestly, not silently (Phase 7d §1b, §3 test #3)");
+  {
+    // Too-short extracted text (under fileTextExtraction.ts's MIN_EXTRACTED_CHARS
+    // heuristic) is the same honest-failure path a scanned-image PDF with no
+    // real text layer would hit — deterministic and sandbox-network-independent,
+    // unlike actually rendering a PDF (see the OCR CDN-block tests above for why
+    // that path is network-dependent in this sandbox).
+    const { context, page } = await newPage(browser);
+    const filePath = join(tmpdir(), "astra-test-too-short.txt");
+    writeFileSync(filePath, "hi");
+    await page.goto(`${APP_URL}/assignments/asg-1`);
+    await page.getByRole("tab", { name: "Upload file" }).click();
+    await page.setInputFiles('input[aria-label="Upload assignment file"]', filePath);
+    record("a file with no real readable content fails with a clear, honest message", await expectText(page, "couldn't find any readable text"));
+    record("the failure offers a retry rather than silently grading empty/garbage text", await expectText(page, "Try again"));
+    record("the Submit button stays disabled — nothing is sent to the grader for this file", await page.getByRole("button", { name: "Submit assignment" }).isDisabled());
     await context.close();
   }
 
@@ -658,16 +728,29 @@ if (!NOT_CONFIGURED) {
     await context.close();
   }
 
-  console.log("\nFile upload is not graded yet");
+  console.log("\nFile upload IS graded through the real pipeline, with a real score (Phase 7d §1b, §3 test #2)");
   {
-    const { context, page } = await newPage(browser);
+    // Same assignment (asg-1, subject "english" — a SECONDARY subject) and
+    // the same rubric-driven mock score the typed-submission test above
+    // proves (22/40): confirming the exact same numbers come out for a file
+    // upload is the concrete proof this is one shared pipeline, not two, and
+    // that secondary-level file grading works, not just university (§3 test #6).
+    const { context, page, errors, store } = await newPage(browser);
     const filePath = join(tmpdir(), "astra-test-upload.txt");
-    writeFileSync(filePath, "uploaded essay text");
+    writeFileSync(filePath, "Qualitative education builds critical thinking, which national development depends on.");
     await page.goto(`${APP_URL}/assignments/asg-1`);
     await page.getByRole("tab", { name: "Upload file" }).click();
     await page.setInputFiles('input[aria-label="Upload assignment file"]', filePath);
+    await page.getByRole("button", { name: "Confirm this is correct" }).click();
     await page.getByRole("button", { name: "Submit assignment" }).click();
-    record("file submission explains it can't get AI feedback yet", await expectText(page, "can't read uploaded files yet"));
+    record("AI feedback heading is shown after a file-upload submit, same as a typed one", await expectText(page, "AI practice feedback"));
+    record("criterion feedback from the proxy is rendered for the uploaded file's text", await expectText(page, "Mock feedback for criterion"));
+    record("the graded file submission is written to graded_submissions", store.rows.length === 1, `${store.rows.length} row(s)`);
+    record(
+      "the saved row carries the exact same rubric-driven score a typed submission of this assignment gets — proving it's one real pipeline, not a stub",
+      store.rows[0]?.assignment_id === "asg-1" && store.rows[0]?.submission_method === "type" && store.rows[0]?.total_score === 22 && store.rows[0]?.max_score === 40
+    );
+    record("no uncaught page errors grading an uploaded file", errors.length === 0, errors.join(" | "));
     await context.close();
   }
 } else {
@@ -867,6 +950,26 @@ if (!NOT_CONFIGURED) {
     record("the grade is labelled as guidance, not an official grade, same as the secondary pipeline", await expectText(page, "not an official grade"));
     await page.screenshot({ path: join(SHOTS, "university-assignment-graded.png"), fullPage: true });
     record("no uncaught page errors through the generate-submit-grade flow", errors.length === 0, errors.join(" | "));
+    await context.close();
+  }
+
+  console.log("\nUniversity assignment: file upload is graded through the SAME pipeline as typed text (Phase 7d §1b, §3 test #2)");
+  console.log("--------------------------------------------------------------------------------------------------------------------");
+  {
+    const { context, page, errors } = await newPageWithLevel(browser, "university", {
+      courses: [{ id: "c1", name: "Fluid Mechanics", code: "MEE 301", customAddedByStudent: false }],
+    });
+    const filePath = join(tmpdir(), "astra-test-uni-upload.txt");
+    writeFileSync(filePath, "Applying Bernoulli's principle, the fluid speeds up where the pipe narrows.");
+    await page.goto(`${APP_URL}/assignments`);
+    await page.getByRole("button", { name: /Generate assignment/ }).click();
+    record("a freshly generated assignment scoped to the course appears", await expectText(page, "Fluid Mechanics", 8000));
+    await page.getByRole("tab", { name: "Upload file" }).click();
+    await page.setInputFiles('input[aria-label="Upload assignment file"]', filePath);
+    await page.getByRole("button", { name: "Confirm this is correct" }).click();
+    await page.getByRole("button", { name: "Submit for grading" }).click();
+    record("a university assignment's file upload is graded through the real pipeline, with a real score — not left unmarked", await expectText(page, "AI practice feedback", 8000));
+    record("no uncaught page errors through the university file-upload grading flow", errors.length === 0, errors.join(" | "));
     await context.close();
   }
 }
@@ -1096,6 +1199,105 @@ console.log("-------------------------------------------------------------------
   await page.goto(`${APP_URL}/progress/topic/${PILOT_TOPIC}`);
   record("the topic detail page shows REAL tracked mastery for the pilot topic, not 'no data yet'", !(await expectText(page, "No data yet for this topic", 1000)));
   record("the real engine recorded both attempts against this topic (questionsAttempted = 2)", await expectText(page, "2", 2000) && (await expectText(page, "Questions attempted")));
+  await context.close();
+}
+
+console.log("\nThe SECOND seeded university course (Calculus I, Faculty of Sciences): the same real engine proof, end-to-end (Phase 7d §1c, §3 test #4)");
+console.log("---------------------------------------------------------------------------------------------------------------------------------------------");
+{
+  // Mirrors the uni-cs-algo block immediately above exactly — same fixture
+  // shape, same real-engine fake, same assertions — proving the second pilot
+  // faculty (Sciences) works end-to-end just like the first (Computing) did
+  // in Phase 7c, not a special case or a shortcut.
+  const calc1CourseForTest = { id: "c1", name: "Calculus I", code: "MTH 101", customAddedByStudent: false };
+  const CALC1_TOPIC = "uni-mth-calc1-limits";
+  const calc1TopicsFixture = [{ id: CALC1_TOPIC, subject_id: "uni-mth-calc1" }];
+  const calc1QuestionsFixture = [
+    {
+      id: "uq-test-calc-1",
+      subject_id: "uni-mth-calc1",
+      topic_id: CALC1_TOPIC,
+      type: "mcq",
+      prompt: "What is lim(x→0) sin(x)/x?",
+      options: [
+        { id: "a", label: "0" },
+        { id: "b", label: "1" },
+        { id: "c", label: "Undefined" },
+        { id: "d", label: "Infinity" },
+      ],
+      correct_option_id: "b",
+      difficulty: 3,
+      explanation: "This is a standard limit provable via the squeeze theorem.",
+      why_wrong_by_option: { a: "A common mix-up with sin(0) = 0 itself.", c: "The limit genuinely exists despite the 0/0 form.", d: "The function is bounded near 0." },
+      worked_example: null,
+    },
+    {
+      id: "uq-test-calc-2",
+      subject_id: "uni-mth-calc1",
+      topic_id: CALC1_TOPIC,
+      type: "mcq",
+      prompt: "For a function f(x) to be continuous at x = a, which condition must hold?",
+      options: [
+        { id: "a", label: "f(a) must simply exist" },
+        { id: "b", label: "lim(x→a) f(x) must exist" },
+        { id: "c", label: "lim(x→a) f(x) must exist AND equal f(a)" },
+        { id: "d", label: "f(x) must be differentiable at a" },
+      ],
+      correct_option_id: "c",
+      difficulty: 2,
+      explanation: "Continuity needs the limit to exist and equal the function's value there.",
+      why_wrong_by_option: { a: "f(a) existing alone is not enough.", b: "The limit existing alone is not enough.", d: "Differentiability is stronger than continuity, not required for it." },
+      worked_example: null,
+    },
+  ];
+
+  const { context, page, errors } = await newPageWithLevel(browser, "university", { courses: [calc1CourseForTest] });
+  installLiveEngineFake(context, { topics: calc1TopicsFixture, questions: calc1QuestionsFixture });
+
+  await page.goto(`${APP_URL}/practice`);
+  record("the second pilot course (Calculus I) is also offered on Practice setup — no gate for it", await hasOption(page, "Calculus I"));
+  await page.getByRole("button", { name: "Start practice" }).click();
+  record("a real practice session starts with one of Calculus I's seeded questions", (await expectText(page, "sin(x)/x", 5000)) || (await expectText(page, "continuous at x", 2000)));
+
+  for (let i = 0; i < 2; i++) {
+    const correctLabel = (await expectText(page, "sin(x)/x", 1000)) ? "1" : "lim(x→a) f(x) must exist AND equal f(a)";
+    await page.getByRole("radio", { name: correctLabel, exact: true }).click();
+    await page.getByRole("button", { name: /Submit answer|Submit & finish/ }).click();
+    const nextButton = page.getByRole("button", { name: "Next question" });
+    await nextButton.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    if (await nextButton.isVisible().catch(() => false)) await nextButton.click();
+  }
+  record("no uncaught page errors completing the Calculus I practice session", errors.length === 0, errors.join(" | "));
+
+  await page.goto(`${APP_URL}/progress/topic/${CALC1_TOPIC}`);
+  record("the topic detail page shows REAL tracked mastery for Calculus I's topic, not 'no data yet'", !(await expectText(page, "No data yet for this topic", 1000)));
+  record("the real engine recorded both attempts against this topic (questionsAttempted = 2)", await expectText(page, "2", 2000) && (await expectText(page, "Questions attempted")));
+  await context.close();
+}
+
+console.log("\nFull AFIT catalog reaches the course-picker UI, sampled across all 6 faculties/schools (Phase 7d §1a, §3 test #1)");
+console.log("------------------------------------------------------------------------------------------------------------------------");
+{
+  // The exhaustive, full-set check (every researched programme, not a
+  // sample) lives in scripts/verify-ai.ts against the SEED_COURSES data
+  // itself. This is the UI-wiring complement: confirming a course from each
+  // faculty is actually reachable through the same search box students use
+  // (CourseEditor.tsx), with the correct faculty label shown alongside it.
+  const { context, page } = await newPageWithLevel(browser, "university");
+  await page.goto(`${APP_URL}/profile`);
+  const facultySamples = [
+    { search: "Aerospace Engineering", faculty: "Air Engineering" },
+    { search: "Telecommunications Engineering", faculty: "Ground and Communication Engineering" },
+    { search: "Cyber Security", faculty: "Computing" },
+    { search: "Banking and Finance", faculty: "Social and Management Sciences" },
+    { search: "Calculus", faculty: "Sciences" },
+    { search: "Logistics Management", faculty: "School of Postgraduate Studies" },
+  ];
+  for (const { search, faculty } of facultySamples) {
+    await page.fill("#profile-course-search", search);
+    record(`course search surfaces a "${faculty}" result for "${search}"`, await expectText(page, faculty, 2000));
+    await page.fill("#profile-course-search", "");
+  }
   await context.close();
 }
 

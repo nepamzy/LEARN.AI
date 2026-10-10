@@ -22,11 +22,12 @@ import {
 } from "../src/lib/educationLevel";
 import type { EducationLevel } from "../src/lib/types";
 import { isTutorLevel, tutorIntroForLevel } from "../supabase/functions/ai-proxy/levelFraming";
-import { SEED_COURSES } from "../src/lib/universityCourses";
+import { SEED_COURSES, SEED_FACULTIES } from "../src/lib/universityCourses";
+import { FileExtractionError, FileExtractionTimeoutError, withExtractionTimeout } from "../src/lib/fileExtraction/fileExtractionErrors";
 import { parseGeneratedAssignment } from "../src/lib/ai/assignmentGeneration";
 import { allowedSubjectIdsForLevel, EXAM_SUBJECTS, UNIVERSITY_NO_COURSES, UNIVERSITY_NO_STRUCTURED_CONTENT } from "../src/lib/educationLevel";
 import { availableSubjectsForLevel, universityContentGateNotice } from "../src/lib/levelContent";
-import { courseHasStructuredContent, PILOT_UNIVERSITY_SUBJECT_ID } from "../src/lib/universityPilotCourse";
+import { courseHasStructuredContent, pilotSubjectIdForCourse, PILOT_UNIVERSITY_SUBJECT_ID, PILOT_UNIVERSITY_SUBJECTS } from "../src/lib/universityPilotCourse";
 import { resolveActiveCourse } from "../src/lib/universityCourseSelection";
 import { assignmentToRow, rowToAssignment, type PersistedUniversityAssignment } from "../src/lib/ai/universityAssignmentRecord";
 import { subjects, topics } from "../src/lib/mockData";
@@ -232,15 +233,65 @@ try {
 }
 check("a task's own failure passes through unchanged, not reported as a timeout", (ownError as Error).message === "own failure" && !(ownError instanceof OcrTimeoutError));
 
-console.log("\nResume decision for interrupted submissions (Phase 6)");
-console.log("------------------------------------------------------");
+console.log("\nFile extraction error/timeout plumbing (Phase 7d §1b)");
+console.log("----------------------------------------------------------");
+// The pure error/timeout module mirroring ocrErrors.ts exactly (see
+// src/lib/fileExtraction/fileExtractionErrors.ts) — it is Deno/Node-safe,
+// so it's unit-tested here the same way. The actual pdfjs-dist/mammoth
+// extraction logic needs a real browser File/ArrayBuffer and is instead
+// covered by scripts/browser-smoke.mjs.
+check("a default FileExtractionError has a clear, actionable message", new FileExtractionError().message.includes("try a different file"));
+check("FileExtractionTimeoutError is a FileExtractionError, so the existing error branch still handles it", new FileExtractionTimeoutError() instanceof FileExtractionError);
+check("the timeout error message tells the student to check their connection and try again", new FileExtractionTimeoutError().message.includes("Check your connection and try again"));
+
+let fileTimedOut: unknown = null;
+try {
+  await withExtractionTimeout(new Promise<never>(() => {}), 30);
+} catch (err) {
+  fileTimedOut = err;
+}
+check("a file-extraction task that never settles rejects once the bound passes", fileTimedOut instanceof FileExtractionTimeoutError);
+
+check("a file-extraction task that settles within the bound resolves with its value", (await withExtractionTimeout(Promise.resolve("extracted text"), 50)) === "extracted text");
+check(
+  "a file-extraction task slower than the bound is timed out even though it eventually succeeds",
+  await withExtractionTimeout(new Promise((r) => setTimeout(() => r("late"), 100)), 20).then(() => false, (e) => e instanceof FileExtractionTimeoutError)
+);
+let ownFileError: unknown = null;
+try {
+  await withExtractionTimeout(Promise.reject(new FileExtractionError("unsupported format")), 50);
+} catch (err) {
+  ownFileError = err;
+}
+check(
+  "a file-extraction task's own failure passes through unchanged, not reported as a timeout",
+  (ownFileError as Error).message === "unsupported format" && !(ownFileError instanceof FileExtractionTimeoutError)
+);
+
+console.log("\nResume decision for interrupted submissions (Phase 6, updated 7d §1b)");
+console.log("------------------------------------------------------------------------");
 const jobBase: Omit<PendingGrading, "submissionMethod" | "result"> = {
   assignmentId: "asg-1",
   request: { assignmentTitle: "t", objective: "o", rubric: [{ id: "r1", name: "n", maxScore: 10 }], studentText: "text" },
   submittedAt: "2026-10-04T12:00:00.000Z",
   recordId: "22222222-2222-4222-8222-222222222222",
 };
-check("a file job is never auto-resumed, it stays visibly not graded", resumeAction({ ...jobBase, submissionMethod: "file" }) === "file-not-graded");
+// Phase 7d §1b: a "file" job now carries the SAME real, already-confirmed
+// extracted text a "type"/"photo" job does, so it resumes exactly like
+// either of them — "file-not-graded" is kept only as a defensive fallback
+// for a job somehow queued with no text at all (not normally reachable).
+check(
+  "a file job WITH real extracted text resumes exactly like a type/photo job (awaits the student, no result yet)",
+  resumeAction({ ...jobBase, submissionMethod: "file" }) === "await-user"
+);
+check(
+  "a file job WITH real extracted text AND an existing grade only needs its save retried, same as type/photo",
+  resumeAction({ ...jobBase, submissionMethod: "file", result: { criteria: [], totalScore: 0, maxScore: 10, strengths: [], improvements: [] } }) === "save-only"
+);
+check(
+  "a file job queued with NO text at all (the defensive fallback case) is never auto-resumed",
+  resumeAction({ ...jobBase, submissionMethod: "file", request: { ...jobBase.request, studentText: "" } }) === "file-not-graded"
+);
 check(
   "a job that already has a grade only needs its save retried (no AI call)",
   resumeAction({ ...jobBase, submissionMethod: "type", result: { criteria: [], totalScore: 0, maxScore: 10, strengths: [], improvements: [] } }) === "save-only"
@@ -330,8 +381,67 @@ check(
 );
 check("university framing (seeded course) never names a secondary exam", !/JAMB|WAEC|NECO|BECE|Common Entrance/.test(seededIntro));
 check("university framing (custom course) never names a secondary exam", !/JAMB|WAEC|NECO|BECE|Common Entrance/.test(customIntro));
-check("SEED_COURSES is modest and explicitly partial, not a large hand-authored catalog (§8)", SEED_COURSES.length > 0 && SEED_COURSES.length < 30);
+// Phase 7d §1a: SEED_COURSES is no longer a "modest, explicitly partial"
+// generic sample (Phase 7b's framing) — it is now deliberately AFIT's real,
+// full undergraduate + named-postgraduate catalog, so a small upper bound
+// would be the wrong thing to assert. The real completeness check is below:
+// every AFIT faculty and program from the task's research is present.
+check("SEED_COURSES is non-empty and has no duplicate ids", SEED_COURSES.length > 0 && new Set(SEED_COURSES.map((c) => c.id)).size === SEED_COURSES.length);
 check("SEED_COURSES spans more than one faculty, so it's not a single-subject sample", new Set(SEED_COURSES.map((c) => c.faculty)).size >= 4);
+
+console.log("\nFull AFIT faculty + programme catalog (Phase 7d §1a, §3 test #1)");
+console.log("---------------------------------------------------------------------");
+// The exact set of AFIT faculties from the task's own research — checked as
+// a full set, not a sample, and not just a count, per the task's explicit
+// instruction. "School of Postgraduate Studies" is included: it is where
+// AFIT's named postgraduate programmes live in this catalog.
+const EXPECTED_AFIT_FACULTIES = [
+  "Air Engineering",
+  "Ground and Communication Engineering",
+  "Computing",
+  "Social and Management Sciences",
+  "Sciences",
+  "School of Postgraduate Studies",
+].sort();
+check(
+  "SEED_FACULTIES is exactly the 6 AFIT faculties/schools researched for this phase — no fewer, no extras",
+  JSON.stringify(SEED_FACULTIES.slice().sort()) === JSON.stringify(EXPECTED_AFIT_FACULTIES)
+);
+// Every undergraduate programme named in the task's own research (the 5
+// faculties' program lists quoted in the Phase 7d spec) must be represented
+// by at least one seeded course tagged with that faculty — checked by
+// programme, not just by faculty name, so a faculty with one token course
+// standing in for five real programmes would fail this.
+const EXPECTED_PROGRAMS_BY_FACULTY: Record<string, string[]> = {
+  "Air Engineering": ["Aerospace", "Mechanical", "Automotive", "Mechatronics", "Metallurgical"],
+  "Ground and Communication Engineering": ["Electrical", "Civil", "Telecommunication"],
+  Computing: ["Computer Science", "Information and Communication Technology", "Cyber Security"],
+  "Social and Management Sciences": ["Accounting", "Business", "Economics", "Marketing", "Banking and Finance", "International Relations"],
+  Sciences: ["Chemistry", "Mathematics", "Physics", "Statistics"],
+};
+const PROGRAM_KEYWORD_TO_NAME_HINT: Record<string, string> = {
+  Aerospace: "Aerospace", Mechanical: "Mechanics", Automotive: "Automotive", Mechatronics: "Mechatronics", Metallurgical: "Metallurg",
+  Electrical: "Circuit|Electromagnetic|Electrical", Civil: "Civil", Telecommunication: "Telecommunications",
+  "Computer Science": "Algorithms|Database|Operating Systems", "Information and Communication Technology": "Information and Communication Technology|Computer Networks",
+  "Cyber Security": "Cyber Security|Network Security",
+  Accounting: "Accounting|Auditing", Business: "Management|Organisational", Economics: "Economics|Econometrics",
+  Marketing: "Marketing|Consumer", "Banking and Finance": "Banking and Finance|Monetary", "International Relations": "International Relations|Foreign Policy",
+  Mathematics: "Calculus|Linear Algebra", Chemistry: "Chemistry", Physics: "Physics|Electronics", Statistics: "Statistics|Probability",
+};
+for (const [faculty, programs] of Object.entries(EXPECTED_PROGRAMS_BY_FACULTY)) {
+  const coursesInFaculty = SEED_COURSES.filter((c) => c.faculty === faculty);
+  for (const program of programs) {
+    const hint = PROGRAM_KEYWORD_TO_NAME_HINT[program] ?? program;
+    const pattern = new RegExp(hint, "i");
+    check(`${faculty}: "${program}" is represented by at least one seeded course`, coursesInFaculty.some((c) => pattern.test(c.name)));
+  }
+}
+const EXPECTED_PG_PROGRAMS = ["Aeronautical and Aerospace Engineering", "Construction Engineering", "Electrical and Electronic Engineering", "Logistics Management", "Thermal Engineering"];
+const pgCourses = SEED_COURSES.filter((c) => c.faculty === "School of Postgraduate Studies");
+check(
+  "every researched School of Postgraduate Studies programme (exactly 5) is present",
+  EXPECTED_PG_PROGRAMS.every((p) => pgCourses.some((c) => c.name.includes(p))) && pgCourses.length === 5
+);
 
 console.log("\nGenerated assignment validation (Phase 7b)");
 console.log("---------------------------------------------");
@@ -429,6 +539,37 @@ check(
   availableSubjectsForLevel("university", [typedPilotCourse]).length === 1
 );
 
+console.log("\nSecond pilot subject (Phase 7d §1c) and multi-course union (Phase 7d §3 test #4)");
+console.log("------------------------------------------------------------------------------------");
+// Generalises the checks above: Phase 7d adds a SECOND pilot course (Calculus
+// I, Faculty of Sciences) without changing the matching mechanism — a
+// student with both courses must see BOTH pilot subjects, not just one.
+const calc1Course: UniversityCourse = { id: "d1", name: "Calculus I", customAddedByStudent: false };
+const typedCalc1Course: UniversityCourse = { id: "d2", name: "  calculus i", customAddedByStudent: true };
+check("PILOT_UNIVERSITY_SUBJECTS now has exactly two entries", PILOT_UNIVERSITY_SUBJECTS.length === 2);
+check(
+  "university with only the Calculus I course resolves to exactly the Calculus I pilot subject",
+  JSON.stringify(availableSubjectsForLevel("university", [calc1Course]).map((s) => s.id)) === JSON.stringify(["uni-mth-calc1"])
+);
+check(
+  "a hand-typed Calculus I course (case/whitespace-insensitive) counts exactly the same as picking it from the seed list",
+  availableSubjectsForLevel("university", [typedCalc1Course]).length === 1
+);
+check(
+  "a student with BOTH pilot courses sees the UNION of both pilot subjects, not just one",
+  JSON.stringify(availableSubjectsForLevel("university", [pilotCourse, calc1Course]).map((s) => s.id).sort()) ===
+    JSON.stringify(["uni-cs-algo", "uni-mth-calc1"].sort())
+);
+check(
+  "a student with both pilot courses plus an unrelated one still sees exactly the two pilot subjects — no leakage, no omission",
+  JSON.stringify(availableSubjectsForLevel("university", [otherCourse, pilotCourse, calc1Course]).map((s) => s.id).sort()) ===
+    JSON.stringify(["uni-cs-algo", "uni-mth-calc1"].sort())
+);
+check("pilotSubjectIdForCourse resolves CSC 201 to uni-cs-algo", pilotSubjectIdForCourse(pilotCourse.name) === "uni-cs-algo");
+check("pilotSubjectIdForCourse resolves Calculus I to uni-mth-calc1", pilotSubjectIdForCourse(calc1Course.name) === "uni-mth-calc1");
+check("pilotSubjectIdForCourse returns undefined for an unrelated course", pilotSubjectIdForCourse(otherCourse.name) === undefined);
+check("courseHasStructuredContent is also true for the second pilot course (Calculus I)", courseHasStructuredContent(calc1Course.name) === true);
+
 console.log("\nUniversity content gate notice (Phase 7c §1c, §7 test #4)");
 console.log("-----------------------------------------------------------------");
 check("zero courses -> the 'add a course' notice, not the 'no structured content' one", universityContentGateNotice([]) === UNIVERSITY_NO_COURSES);
@@ -436,19 +577,23 @@ check("a course, but not the pilot -> the 'no structured content yet' notice", u
 check("the pilot course present -> no gate at all (null), real content should show", universityContentGateNotice([pilotCourse]) === null);
 check("the pilot course alongside an unrelated one -> still no gate", universityContentGateNotice([otherCourse, pilotCourse]) === null);
 
-console.log("\nPilot university course wiring (Phase 7c §1d, §7 test #5)");
-console.log("-----------------------------------------------------------------");
-check("the pilot subject id is registered as a live (engine-backed) subject", (LIVE_SUBJECT_IDS as readonly string[]).includes(PILOT_UNIVERSITY_SUBJECT_ID));
+console.log("\nPilot university course wiring (Phase 7c §1d + Phase 7d §1c, §7 test #5)");
+console.log("-----------------------------------------------------------------------------");
+check("the first pilot subject id (CSC 201) is registered as a live (engine-backed) subject", (LIVE_SUBJECT_IDS as readonly string[]).includes(PILOT_UNIVERSITY_SUBJECT_ID));
+check("the second pilot subject id (Calculus I) is also registered as a live (engine-backed) subject", (LIVE_SUBJECT_IDS as readonly string[]).includes("uni-mth-calc1"));
 check("the pilot subject exists in the shared subjects list", subjects.some((s) => s.id === PILOT_UNIVERSITY_SUBJECT_ID));
+check("the second pilot subject (Calculus I) also exists in the shared subjects list", subjects.some((s) => s.id === "uni-mth-calc1"));
 const pilotTopics = topics.filter((t) => t.subjectId === PILOT_UNIVERSITY_SUBJECT_ID);
-check("the pilot course has between 3 and 5 topics, per §1d's 'a handful' (not full coverage)", pilotTopics.length >= 3 && pilotTopics.length <= 5);
+check("the first pilot course has between 3 and 5 topics, per §1d's 'a handful' (not full coverage)", pilotTopics.length >= 3 && pilotTopics.length <= 5);
+const secondPilotTopics = topics.filter((t) => t.subjectId === "uni-mth-calc1");
+check("the second pilot course (Calculus I) also has between 3 and 5 topics, same depth as the first", secondPilotTopics.length >= 3 && secondPilotTopics.length <= 5);
 check("courseHasStructuredContent matches the pilot course's exact name", courseHasStructuredContent(pilotCourse.name) === true);
 check("courseHasStructuredContent matches case/whitespace-insensitively, since a typed course must work identically to a seeded one", courseHasStructuredContent(typedPilotCourse.name) === true);
 check("courseHasStructuredContent rejects an unrelated course name", courseHasStructuredContent(otherCourse.name) === false);
 check("courseHasStructuredContent rejects an empty string rather than matching everything", courseHasStructuredContent("") === false);
 check(
-  "every OTHER seeded course has no structured content — this pilot is deliberately single-course",
-  SEED_COURSES.filter((c) => c.id !== "cs-algo").every((c) => !courseHasStructuredContent(c.name))
+  "every OTHER seeded course has no structured content — this is deliberately a two-course pilot (Computing + Sciences), not broader coverage",
+  SEED_COURSES.filter((c) => c.id !== "cs-algo" && c.id !== "mth-calculus1").every((c) => !courseHasStructuredContent(c.name))
 );
 
 console.log("\nActive-course resolution never references a removed course (Phase 7c §1a, §7 test #1)");
